@@ -8,6 +8,8 @@ interface ActionHeroCardProps {
   actionResponse: CurrentActionResponse | null;
   isPaper: boolean;
   loading: boolean;
+  isVerifying?: boolean;
+  lastVerifiedAt?: string | null;
   onBoughtClick: () => void;
   onMissedClick: () => void;
   onWhyClick: () => void;
@@ -19,6 +21,8 @@ export const ActionHeroCard: React.FC<ActionHeroCardProps> = ({
   actionResponse,
   isPaper,
   loading,
+  isVerifying = false,
+  lastVerifiedAt = null,
   onBoughtClick,
   onMissedClick,
   onWhyClick,
@@ -69,17 +73,43 @@ export const ActionHeroCard: React.FC<ActionHeroCardProps> = ({
 
   // 3. ESTADO: NENHUMA AÇÃO DISPONÍVEL
   if (!action || !actionResponse?.has_action) {
+    const isInsufficientMargin = actionResponse?.no_action_reason_code === 'INSUFFICIENT_MARGIN';
+
     return (
       <div className="hero-action-card no-action">
         <div className="hero-header-row">
-          <div className="hero-title-badge">
-            <span className="hero-strategy-pill" style={{ borderColor: 'var(--border-active)', color: 'var(--text-secondary)' }}>
-              MERCADO EM OBSERVAÇÃO
+          <div className="hero-title-badge" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span
+              className="hero-strategy-pill"
+              style={{
+                borderColor: isInsufficientMargin ? 'rgba(234, 179, 8, 0.4)' : 'var(--border-active)',
+                color: isInsufficientMargin ? '#facc15' : 'var(--text-secondary)',
+                fontWeight: 700,
+              }}
+            >
+              {actionResponse?.no_action_reason_code ? `STATUS: ${actionResponse.no_action_reason_code}` : 'MERCADO EM OBSERVAÇÃO'}
             </span>
+            {lastVerifiedAt && (
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                Checado às {lastVerifiedAt}
+              </span>
+            )}
           </div>
-          <button onClick={onRefresh} className="btn-terminal" title="Verificar novas oportunidades">
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-            <span>Verificar</span>
+          <button
+            onClick={onRefresh}
+            className="btn-terminal"
+            disabled={isVerifying || loading}
+            title="Disparar reanálise explícita do mercado"
+            style={{
+              opacity: isVerifying ? 0.75 : 1,
+              cursor: isVerifying ? 'wait' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <RefreshCw size={13} className={isVerifying ? 'animate-spin' : ''} />
+            <span>{isVerifying ? 'Verificando...' : 'Verificar'}</span>
           </button>
         </div>
 
@@ -126,14 +156,27 @@ export const ActionHeroCard: React.FC<ActionHeroCardProps> = ({
           <div className="hero-strategy-pill">
             {action.strategy_name.toUpperCase()}
           </div>
+          {action.strategy_type && (
+            <span className="badge" style={{ background: 'rgba(56, 189, 248, 0.15)', color: 'var(--accent-blue)', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+              {action.strategy_type.replace('_', ' ')}
+            </span>
+          )}
           <span className={`badge ${action.urgency === 'ALTA' ? 'red' : 'gold'}`}>
             URGÊNCIA {action.urgency}
           </span>
         </div>
 
-        <div className="hero-expiry-tag">
-          <Clock size={14} />
-          <span>Válido por: <strong style={{ color: isExpired ? 'var(--accent-red)' : '#fff' }}>{timeLeftStr}</strong></span>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {action.market_data_age_seconds !== undefined && action.market_data_age_seconds !== null && (
+            <div className="hero-expiry-tag" style={{ background: 'rgba(56, 189, 248, 0.12)', borderColor: 'rgba(56, 189, 248, 0.25)', color: '#38bdf8' }}>
+              <Clock size={13} />
+              <span>Cotação: <strong>{action.market_data_age_seconds < 60 ? `${action.market_data_age_seconds}s atrás` : `${Math.floor(action.market_data_age_seconds / 60)}m atrás`}</strong></span>
+            </div>
+          )}
+          <div className="hero-expiry-tag">
+            <Clock size={14} />
+            <span>Válido por: <strong style={{ color: isExpired ? 'var(--accent-red)' : '#fff' }}>{timeLeftStr}</strong></span>
+          </div>
         </div>
       </div>
 
@@ -236,13 +279,28 @@ export const ActionHeroCard: React.FC<ActionHeroCardProps> = ({
           <div className="subtext">Anuncie assim que arrematar</div>
         </div>
 
-        <div className="hero-metric-tile">
-          <div className="label">Lucro Líquido Estimado</div>
-          <div className="value" style={{ color: 'var(--accent-green)' }}>
-            +{action.estimated_total_profit.toLocaleString()} <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>coins</span>
-          </div>
-          <div className="subtext">+{action.estimated_profit_per_card.toLocaleString()} / carta (ROI: {(action.estimated_roi * 100).toFixed(1)}%)</div>
-        </div>
+        {(() => {
+          const maxBuyProfitPerCard = action.profit_at_max_buy ?? action.estimated_profit_per_card;
+          const maxBuyTotalProfit = maxBuyProfitPerCard * action.recommended_quantity;
+          const maxBuyRoiPct = ((action.roi_at_max_buy ?? action.estimated_roi) * 100).toFixed(1);
+
+          return (
+            <div className="hero-metric-tile" id="hero-metric-profit">
+              <div className="label">Lucro Mínimo Estimado no Teto</div>
+              <div className="value" style={{ color: 'var(--accent-green)' }}>
+                +{maxBuyTotalProfit.toLocaleString()} <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>coins</span>
+              </div>
+              <div className="subtext">
+                +{maxBuyProfitPerCard.toLocaleString()} / carta no teto (ROI: {maxBuyRoiPct}%)
+              </div>
+              {action.snapshot_observed_price !== undefined && action.snapshot_observed_price !== null && action.snapshot_observed_price < action.max_buy_price && (
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', borderTop: '1px dashed var(--border-subtle)', paddingTop: '4px' }}>
+                  Na cotação observada de {action.snapshot_observed_price.toLocaleString()} coins: lucro estimado +{action.estimated_profit_per_card.toLocaleString()} / carta (ROI: {(action.estimated_roi * 100).toFixed(1)}%).
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         <div className="hero-metric-tile">
           <div className="label">Capital Máximo Alocado</div>

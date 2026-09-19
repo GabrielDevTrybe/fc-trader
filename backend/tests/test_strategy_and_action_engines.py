@@ -1,7 +1,15 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
-from app.models.entities import Player, PlayerCard, MarketOpportunity, ActionRecommendation, TradingGoal
+from app.models.entities import (
+    Player,
+    PlayerCard,
+    MarketOpportunity,
+    ActionRecommendation,
+    TradingGoal,
+    BankrollHistory,
+    Trade,
+)
 from app.engines.strategy import StrategyEngine
 from app.engines.action import ActionEngine
 from app.services.action_service import ActionService
@@ -238,3 +246,333 @@ def test_action_service_bought_feedback_with_multiple_prices(db_session: Session
     # Verifica se a recomendação foi para executed
     db_session.refresh(rec)
     assert rec.status == "executed"
+
+
+def test_action_service_concentration_with_existing_inventory(db_session: Session):
+    """Regressão: quando há estoque/posições em aberto ocupando o limite,
+    deve manter reason code CONCENTRATION_LIMIT_REACHED e sugerir aguardar a venda das cartas em aberto."""
+    now = datetime.now(timezone.utc)
+    action_service = ActionService(db=db_session)
+
+    player = Player(name="Gabriel Martinelli", rating=84, data_origin="test")
+    db_session.add(player)
+    db_session.flush()
+
+    card = PlayerCard(
+        player_id=player.id,
+        game_version="FC27",
+        rating=84,
+        position="LW",
+        rarity="Gold",
+        club="Arsenal",
+        data_origin="test",
+        is_active=True,
+    )
+    db_session.add(card)
+    db_session.flush()
+
+    # Banca de 7.640 coins com posições abertas
+    db_session.add(
+        BankrollHistory(
+            balance=5690,
+            is_paper=True,
+            reason="initial",
+            entry_type="initial_deposit",
+            data_origin="test",
+            recorded_at=now,
+        )
+    )
+
+    # 3 posições abertas deste jogador (atinge MAX_OPEN_POSITIONS_PER_PLAYER)
+    for _ in range(3):
+        trade = Trade(
+            card_id=card.id,
+            player_id=player.id,
+            buy_price=650,
+            status="open",
+            is_paper_trade=True,
+            data_origin="test",
+            bought_at=now,
+        )
+        db_session.add(trade)
+
+    opp = MarketOpportunity(
+        id=uuid.uuid4(),
+        card_id=card.id,
+        player_id=player.id,
+        observed_price=650,
+        market_price=1000,
+        max_buy_price=650,
+        target_sell_price=1000,
+        estimated_profit=300,
+        roi=0.46,
+        confidence="HIGH",
+        liquidity_score=80,
+        opportunity_score=90.0,
+        data_origin="test",
+        detected_at=now,
+        expires_at=now + timedelta(minutes=30),
+    )
+    db_session.add(opp)
+    db_session.commit()
+
+    resp = action_service.verify_market(is_paper=True, data_origin="test")
+
+    assert resp.has_action is False
+    assert resp.status == "NO_ACTION"
+    assert resp.no_action_reason_code == "CONCENTRATION_LIMIT_REACHED"
+    assert "Aguarde a venda de cartas em aberto para liberar margem de exposição." in (resp.suggestion or "")
+    assert "Gabriel Martinelli" in (resp.message or "") or "concentração" in (resp.message or "").lower()
+
+
+def test_action_service_concentration_with_zero_inventory_expensive_card(db_session: Session):
+    """Regressão: quando inventory_cost = 0, open_positions = 0 e a oportunidade excede o limite de concentração,
+    deve manter reason code CONCENTRATION_LIMIT_REACHED, explicar que a carta é cara demais para a banca
+    e NÃO sugerir aguardar a venda de cartas em aberto."""
+    now = datetime.now(timezone.utc)
+    action_service = ActionService(db=db_session)
+
+    player = Player(name="Gabriel Martinelli", rating=84, data_origin="test")
+    db_session.add(player)
+    db_session.flush()
+
+    card = PlayerCard(
+        player_id=player.id,
+        game_version="FC27",
+        rating=84,
+        position="LW",
+        rarity="Gold",
+        club="Arsenal",
+        data_origin="test",
+        is_active=True,
+    )
+    db_session.add(card)
+    db_session.flush()
+
+    # Banca de 7.640 coins, sem nenhuma posição aberta (inventory_cost = 0, open_positions = 0)
+    db_session.add(
+        BankrollHistory(
+            balance=7640,
+            is_paper=True,
+            reason="initial",
+            entry_type="initial_deposit",
+            data_origin="test",
+            recorded_at=now,
+        )
+    )
+
+    # Oportunidade com max_buy_price = 3.500 coins.
+    # 3.500 / 7.640 = ~45.8% da banca, excedendo o teto de 25% (1.910 coins)
+    opp = MarketOpportunity(
+        id=uuid.uuid4(),
+        card_id=card.id,
+        player_id=player.id,
+        observed_price=3500,
+        market_price=4500,
+        max_buy_price=3500,
+        target_sell_price=4500,
+        estimated_profit=775,
+        roi=0.22,
+        confidence="HIGH",
+        liquidity_score=80,
+        opportunity_score=85.0,
+        data_origin="test",
+        detected_at=now,
+        expires_at=now + timedelta(minutes=30),
+    )
+    db_session.add(opp)
+    db_session.commit()
+
+    resp = action_service.verify_market(is_paper=True, data_origin="test")
+
+    assert resp.has_action is False
+    assert resp.status == "NO_ACTION"
+    assert resp.no_action_reason_code == "CONCENTRATION_LIMIT_REACHED"
+    # Sugestão NÃO deve ser a de aguardar venda
+    assert "Aguarde a venda de cartas em aberto" not in (resp.suggestion or "")
+    # Deve sugerir procurar oportunidade mais barata / menor valor ou aumentar a banca
+    assert "Procure uma oportunidade mais barata compatível com sua banca" in (resp.suggestion or "")
+    assert "aumente a sua banca" in (resp.suggestion or "")
+    # Explicação factual com valores derivados do pipeline (3.500 coins, 45,8%, 25%)
+    assert "3.500" in (resp.message or "")
+    assert "45,8%" in (resp.message or "")
+    assert "25%" in (resp.message or "")
+
+
+def test_get_current_action_is_strictly_read_only_and_does_not_create_recommendation(client, db_session: Session):
+    """Prova A, B e C:
+    A. GET /actions/current não cria ActionRecommendation.
+    B. GET /actions/current não executa mutação/persistência quando não existe recomendação ativa.
+    C. POST /actions/verify continua gerando/reavaliando recommendation.
+    """
+    from fastapi.testclient import TestClient
+    from app.models.entities import PriceObservation
+
+    now = datetime.now(timezone.utc)
+
+    # 1. Configura banca Paper
+    db_session.add(
+        BankrollHistory(
+            balance=50000,
+            is_paper=True,
+            reason="initial",
+            entry_type="initial_deposit",
+            data_origin="test",
+            recorded_at=now,
+        )
+    )
+    db_session.commit()
+    t0 = now - timedelta(seconds=30)
+    t1 = now
+    batch_obs = [
+        {"player": "Declan Rice", "rating": 83, "price": 1000, "type": "buy_now", "position": "CDM", "club": "Arsenal", "data_origin": "test", "observed_at": t0.isoformat()},
+        {"player": "Declan Rice", "rating": 83, "price": 1050, "type": "buy_now", "position": "CDM", "club": "Arsenal", "data_origin": "test", "observed_at": t0.isoformat()},
+        {"player": "Declan Rice", "rating": 83, "price": 1000, "type": "buy_now", "position": "CDM", "club": "Arsenal", "data_origin": "test", "observed_at": t0.isoformat()},
+        {"player": "Declan Rice", "rating": 83, "price": 600, "type": "bid", "position": "CDM", "club": "Arsenal", "data_origin": "test", "observed_at": t1.isoformat()},
+    ]
+    resp_obs = client.post("/api/v1/observations", json=batch_obs)
+    assert resp_obs.status_code == 200
+
+    # Antes de qualquer chamada: 0 recomendações no banco
+    assert db_session.query(ActionRecommendation).filter(ActionRecommendation.data_origin == "test").count() == 0
+
+    # Chamada A: GET /actions/current deve ser estritamente read-only
+    get_res = client.get("/api/v1/actions/current?is_paper=true&data_origin=test")
+    assert get_res.status_code == 200
+    get_data = get_res.json()
+    assert get_data["has_action"] is False
+    assert get_data["status"] == "NO_ACTION"
+
+    # Confirma que NENHUMA ActionRecommendation foi criada pelo GET
+    assert db_session.query(ActionRecommendation).filter(ActionRecommendation.data_origin == "test").count() == 0
+
+    # Chamada B: POST /actions/verify realiza a reanálise explícita e gera a ActionRecommendation
+    verify_res = client.post("/api/v1/actions/verify?is_paper=true&data_origin=test")
+    assert verify_res.status_code == 200
+    verify_data = verify_res.json()
+    assert verify_data["has_action"] is True
+    assert verify_data["status"] == "ACTION_AVAILABLE"
+    rec_payload = verify_data["action"]
+    assert rec_payload is not None
+    assert rec_payload["player_name"] == "Declan Rice"
+    assert rec_payload["profit_at_max_buy"] is not None
+    assert rec_payload["roi_at_max_buy"] is not None
+    assert rec_payload["profit_at_max_buy"] > 0
+    assert rec_payload["roi_at_max_buy"] > 0
+
+    # Confirma que agora existe exatamente 1 ActionRecommendation persistida
+    assert db_session.query(ActionRecommendation).filter(ActionRecommendation.data_origin == "test").count() == 1
+
+    # Chamada C: GET /actions/current subsequente agora retorna a recomendação ativa sem criar duplicatas
+    get_res2 = client.get("/api/v1/actions/current?is_paper=true&data_origin=test")
+    assert get_res2.status_code == 200
+    get_data2 = get_res2.json()
+    assert get_data2["has_action"] is True
+    assert get_data2["action"]["id"] == rec_payload["id"]
+    assert get_data2["action"]["profit_at_max_buy"] == rec_payload["profit_at_max_buy"]
+    assert get_data2["action"]["roi_at_max_buy"] == rec_payload["roi_at_max_buy"]
+
+    # Contagem no banco permanece estritamente 1
+    assert db_session.query(ActionRecommendation).filter(ActionRecommendation.data_origin == "test").count() == 1
+
+
+def test_profit_and_roi_at_max_buy_exact_calculations_and_why_explanation():
+    """Prova F, G, H, J:
+    F. cálculo de profit_at_max_buy
+    G. cálculo de roi_at_max_buy
+    H. exemplo equivalente dos requisitos:
+       observed=1000, max_buy=1175, target_sell=1500, tax=5%
+       observed profit=425, observed ROI=42,5%
+       max-buy profit=250, max-buy ROI~=21,28%
+    J. 'Por que isso?' não atribui lucro observado ao max_buy e distingue claramente os cenários.
+    """
+    from app.engines.tax import calculate_profit, calculate_roi
+    from app.engines.strategy import StrategyDecision
+
+    # 1. Validação matemática pura do TaxEngine
+    observed_price = 1000
+    max_buy_price = 1175
+    target_sell_price = 1500
+    tax_rate = 0.05
+
+    # net_sale = floor(1500 * 0.95) = 1425
+    # Cenário A: Preço observado
+    profit_observed = calculate_profit(observed_price, target_sell_price, tax_rate)
+    roi_observed = calculate_roi(observed_price, target_sell_price, tax_rate)
+    assert profit_observed == 425
+    assert roi_observed == 0.425  # 42,5%
+
+    # Cenário B: Preço no teto (max_buy)
+    profit_max_buy = calculate_profit(max_buy_price, target_sell_price, tax_rate)
+    roi_max_buy = calculate_roi(max_buy_price, target_sell_price, tax_rate)
+    assert profit_max_buy == 250
+    expected_roi = 250.0 / 1175.0  # ~= 0.212765957... (21,28%)
+    assert abs(roi_max_buy - expected_roi) < 1e-6
+    assert f"{roi_max_buy * 100:.2f}%" == "21.28%"
+
+    # 2. Formatação no ActionEngine
+    action_engine = ActionEngine()
+
+    opp = MarketOpportunity(
+        id=uuid.uuid4(),
+        card_id=uuid.uuid4(),
+        player_id=uuid.uuid4(),
+        observed_price=observed_price,
+        market_price=target_sell_price,
+        max_buy_price=max_buy_price,
+        target_sell_price=target_sell_price,
+        estimated_profit=profit_observed,
+        roi=roi_observed,
+        confidence="HIGH",
+        liquidity_score=80,
+        opportunity_score=85.0,
+        platform="console",
+        data_origin="test",
+    )
+
+    decision = StrategyDecision(
+        has_action=True,
+        opportunity=opp,
+        action_type="CONSERVATIVE_FLIP",
+        strategy_name="Flip Conservador",
+        strategy_type="QUICK_FLIP",
+        recommended_quantity=2,
+        capital_limit=max_buy_price * 2,
+        estimated_profit_per_card=profit_observed,
+        estimated_total_profit=profit_observed * 2,
+        estimated_roi=roi_observed,
+        capital_efficiency=1.5,
+        urgency="NORMAL",
+    )
+
+    presentation = action_engine.format_action(
+        decision=decision,
+        sample_count=8,
+        available_cash=10000,
+    )
+
+    # Campos estruturados preservados
+    assert presentation.profit_at_max_buy == 250
+    assert abs(presentation.roi_at_max_buy - expected_roi) < 1e-6
+    assert presentation.estimated_profit_per_card == 425
+    assert presentation.estimated_roi == 0.425
+    assert presentation.snapshot_observed_price == 1000
+
+    # Instrução de lucro destaca o teto de compra conservador
+    assert "250" in presentation.profit_instruction
+    assert "500" in presentation.profit_instruction  # 250 * 2
+
+    # "Por que isso?" distingue com exatidão os cenários:
+    why = presentation.why_explanation
+    # Não deve afirmar que pagando 1.175 assegura 425
+    assert "Pagando até 1.175 coins, a margem líquida assegura +425" not in why
+    assert "assegura +425" not in why
+    assert "garantido" not in why.lower()
+    assert "garantida" not in why.lower()
+
+    # Deve conter a cotação recente e seu lucro
+    assert "Na cotação recente de 1.000 coins, o lucro estimado é +425 coins (ROI 42,5%)" in why
+    # Deve conter o teto e seu lucro mínimo estimado
+    assert "O teto de compra é 1.175 coins; comprando exatamente no teto, o lucro mínimo estimado é +250 coins (ROI ~21,3%)" in why
+
+

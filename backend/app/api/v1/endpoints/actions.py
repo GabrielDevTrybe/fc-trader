@@ -13,9 +13,23 @@ def get_current_action(
     data_origin: str = Query("user", description="Isolamento de origem: 'user' ou 'test'"),
     db: Session = Depends(get_db),
 ):
-    """Retorna a melhor ação quantitativa do momento ('FAÇA ISSO AGORA') ou status NO_ACTION."""
+    """Consulta puramente READ-ONLY da recomendação ativa ('FAÇA ISSO AGORA') ou status NO_ACTION."""
     service = ActionService(db)
     return service.get_current_action(is_paper=is_paper, data_origin=data_origin)
+
+
+@router.post("/verify", response_model=CurrentActionResponse)
+def verify_market(
+    is_paper: bool = Query(False, description="Modalidade Paper ou Real"),
+    data_origin: str = Query("user", description="Isolamento de origem: 'user' ou 'test'"),
+    db: Session = Depends(get_db),
+):
+    """Comando explícito de reanálise determinística completa do mercado:
+
+    Market Intelligence -> Opportunity Discovery -> Strategy/Risk -> Action Recommendation.
+    """
+    service = ActionService(db)
+    return service.verify_market(is_paper=is_paper, data_origin=data_origin)
 
 
 @router.post("/feedback")

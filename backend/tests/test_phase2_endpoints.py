@@ -47,7 +47,10 @@ def test_phase2_api_full_flow(client: TestClient, db_session: Session):
     resp_obs = client.post("/api/v1/observations", json=batch_obs)
     assert resp_obs.status_code == 200
 
-    # 5. Consultar Ação Atual desbloqueada
+    # 5. Executar reanálise explícita e consultar Ação Atual desbloqueada (Read-Only)
+    res_verify = client.post("/api/v1/actions/verify?is_paper=false&data_origin=test")
+    assert res_verify.status_code == 200
+
     res_act = client.get("/api/v1/actions/current?is_paper=false&data_origin=test")
     assert res_act.status_code == 200
     action_data = res_act.json()

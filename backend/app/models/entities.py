@@ -73,6 +73,41 @@ class PlayerCard(Base):
     opportunities = relationship("MarketOpportunity", back_populates="card", cascade="all, delete-orphan")
     trades = relationship("Trade", back_populates="card", cascade="all, delete-orphan")
     recommendations = relationship("ActionRecommendation", back_populates="card", cascade="all, delete-orphan")
+    snapshots = relationship("MarketSnapshot", back_populates="card", cascade="all, delete-orphan")
+
+
+class MarketSnapshot(Base):
+    """Snapshot estatístico determinístico de inteligência de mercado para uma CardVersion e plataforma."""
+    __tablename__ = "market_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid)
+    card_id = Column(UUID(as_uuid=True), ForeignKey("player_cards.id", ondelete="CASCADE"), nullable=False, index=True)
+    platform = Column(String(20), nullable=False, default="console", server_default="console")
+    sample_count = Column(Integer, nullable=False, default=0)
+    valid_sample_count = Column(Integer, nullable=False, default=0)
+    min_price = Column(Integer, nullable=True)
+    max_price = Column(Integer, nullable=True)
+    median_price = Column(Integer, nullable=True)
+    p20_price = Column(Integer, nullable=True)
+    p80_price = Column(Integer, nullable=True)
+    robust_mean = Column(Float, nullable=True)
+    std_dev = Column(Float, nullable=True)
+    dispersion_ratio = Column(Float, nullable=True)
+    estimated_market_price = Column(Integer, nullable=True)
+    conservative_buy_price = Column(Integer, nullable=True)
+    conservative_sell_price = Column(Integer, nullable=True)
+    confidence_score = Column(Float, nullable=False, default=0.0)
+    confidence_level = Column(String(20), nullable=False, default="LOW")
+    freshness_status = Column(String(20), nullable=False, default="FRESH")
+    newest_observation_age_seconds = Column(Integer, nullable=True)
+    trend = Column(String(20), nullable=False, default="NEUTRAL")
+    data_quality = Column(String(30), nullable=False, default="OK")
+    calculated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    data_origin = Column(String(20), nullable=False, default="user", server_default="user")
+
+    # Relationships
+    card = relationship("PlayerCard", back_populates="snapshots")
 
 
 class CardExternalId(Base):
@@ -103,7 +138,7 @@ class PriceObservation(Base):
     price = Column(Integer, nullable=False)
     observation_type = Column(String(30), nullable=False, default="buy_now")  # buy_now, bid, sale_estimate
     platform = Column(String(20), nullable=False, default="console", server_default="console")  # console, pc
-    source = Column(String(50), nullable=False, default="manual")  # Proveniência da cotação
+    source = Column(String(50), nullable=False, default="manual")  # Proveniência: manual, csv, USER_MARKET_CHECK
     data_origin = Column(String(20), nullable=False, default="user", server_default="user")
     observed_at = Column(DateTime(timezone=True), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now())
@@ -129,6 +164,9 @@ class MarketOpportunity(Base):
     confidence = Column(String(20), nullable=False)
     liquidity_score = Column(Integer, nullable=False)
     opportunity_score = Column(Float, nullable=False, index=True)
+    strategy_type = Column(String(30), nullable=False, default="QUICK_FLIP", server_default="QUICK_FLIP")
+    capital_efficiency = Column(Float, nullable=True)
+    expected_holding_time_minutes = Column(Integer, nullable=True)
     platform = Column(String(20), nullable=False, default="console", server_default="console")
     data_origin = Column(String(20), nullable=False, default="user", server_default="user")
     detected_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
@@ -190,6 +228,10 @@ class ActionRecommendation(Base):
     estimated_total_profit = Column(Integer, nullable=False)
     estimated_roi = Column(Float, nullable=False)
 
+    # Métricas Estruturadas no Teto Máximo de Compra (Cenário Conservador)
+    profit_at_max_buy = Column(Integer, nullable=True)
+    roi_at_max_buy = Column(Float, nullable=True)
+
     # Snapshot Quantitativo Auditável
     snapshot_market_price = Column(Integer, nullable=False)
     snapshot_observed_price = Column(Integer, nullable=False)
@@ -207,10 +249,19 @@ class ActionRecommendation(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=False)
 
+    # Auditoria e Rastreabilidade da Fase 3A
+    market_snapshot_id = Column(UUID(as_uuid=True), ForeignKey("market_snapshots.id", ondelete="SET NULL"), nullable=True)
+    market_data_age_seconds = Column(Integer, nullable=True)
+    strategy_type = Column(String(30), nullable=False, default="QUICK_FLIP", server_default="QUICK_FLIP")
+    capital_efficiency = Column(Float, nullable=True)
+    expected_holding_time_minutes = Column(Integer, nullable=True)
+    no_action_reason_code = Column(String(50), nullable=True)
+
     # Relationships
     card = relationship("PlayerCard", back_populates="recommendations")
     player = relationship("Player")
     trading_goal = relationship("TradingGoal", back_populates="recommendations")
+    market_snapshot = relationship("MarketSnapshot")
     feedbacks = relationship("ActionFeedback", back_populates="recommendation", cascade="all, delete-orphan")
 
 

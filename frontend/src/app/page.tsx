@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
 import {
   CurrentActionResponse,
@@ -22,6 +22,12 @@ export default function ActionFirstHomePage() {
   const [apiConnected, setApiConnected] = useState(false);
   const [isPaperMode, setIsPaperMode] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [lastVerifiedAt, setLastVerifiedAt] = useState<string | null>(null);
+
+  // Guards contra race condition entre alternância REAL <-> PAPER
+  const activeRequestIdRef = useRef<number>(0);
+  const activeModeRef = useRef<boolean>(true);
 
   // Phase 2 Data States
   const [actionResponse, setActionResponse] = useState<CurrentActionResponse | null>(null);
@@ -35,56 +41,79 @@ export default function ActionFirstHomePage() {
   const [isWhyOpen, setIsWhyOpen] = useState(false);
   const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false);
 
-  const loadData = useCallback(async () => {
+  // Carregamento concorrente e atômico dos dados
+  const loadData = useCallback(async (modeOverride?: boolean) => {
+    const targetMode = modeOverride !== undefined ? modeOverride : activeModeRef.current;
+    const requestId = ++activeRequestIdRef.current;
+
     try {
-      // 1. Health check
-      try {
-        await api.getHealth();
-        setApiConnected(true);
-      } catch {
-        setApiConnected(false);
+      // Dispara requisições simultaneamente com Promise.all para reduzir latência e evitar cascata
+      const [cap, goal, act, tList] = await Promise.all([
+        api.getCapitalSummary(targetMode),
+        api.getActiveGoal(targetMode).catch(() => null),
+        api.getCurrentAction(targetMode).catch(() => null),
+        api.getTrades(targetMode, 'open').catch(() => []),
+      ]);
+
+      // PROTEÇÃO DE RACE CONDITION (Adjustment 4):
+      // Se a modalidade foi alterada ou outra requisição mais nova foi emitida, descarta integralmente a resposta
+      if (requestId !== activeRequestIdRef.current || targetMode !== activeModeRef.current) {
+        return;
       }
 
-      // 2. Capital Breakdown
-      const cap = await api.getCapitalSummary(isPaperMode);
+      // ATUALIZAÇÃO ATÔMICA: Atualiza todos os estados dependentes no mesmo ciclo de renderização
       setCapitalSummary(cap);
-
-      // 3. Active Goal
-      try {
-        const goal = await api.getActiveGoal(isPaperMode);
-        setActiveGoal(goal);
-      } catch {
-        setActiveGoal(null);
-      }
-
-      // 4. Current Action
-      const act = await api.getCurrentAction(isPaperMode);
+      setActiveGoal(goal);
       setActionResponse(act);
-
-      // 5. Open Positions
-      const tList = await api.getTrades(isPaperMode, 'open');
       setOpenTrades(tList);
+      setApiConnected(true);
     } catch (err) {
       console.error('Falha ao carregar dados do Cockpit de Ação:', err);
+      if (requestId === activeRequestIdRef.current) {
+        setApiConnected(false);
+      }
     } finally {
-      setLoading(false);
+      if (requestId === activeRequestIdRef.current) {
+        setLoading(false);
+      }
     }
-  }, [isPaperMode]);
+  }, []);
 
-  // Initial load and polling
+  // Carga inicial sem polling (atualizações acionadas estritamente por eventos explícitos)
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 4000); // Polling a cada 4 segundos
-    return () => clearInterval(interval);
   }, [loadData]);
 
-  const handleTogglePaperMode = (paper: boolean) => {
-    setIsPaperMode(paper);
+  // Alternância determinística e atômica REAL <-> PAPER
+  const handleTogglePaperMode = (newMode: boolean) => {
+    activeModeRef.current = newMode;
+    activeRequestIdRef.current++; // Invalida imediatamente qualquer requisição pendente do modo anterior
+    setIsPaperMode(newMode);
     setLoading(true);
     setActionResponse(null);
     setCapitalSummary(null);
     setActiveGoal(null);
     setOpenTrades([]);
+    loadData(newMode);
+  };
+
+  // Reanálise explícita via botão "Verificar" (Adjustment 1, 2, 3 e 5)
+  const handleVerifyMarket = async () => {
+    setIsVerifying(true);
+    try {
+      const res = await api.verifyMarket(isPaperMode);
+      setActionResponse(res);
+      const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      setLastVerifiedAt(nowStr);
+
+      // Re-sincroniza resumo patrimonial de forma segura
+      const cap = await api.getCapitalSummary(isPaperMode);
+      setCapitalSummary(cap);
+    } catch (err) {
+      console.error('Erro ao verificar mercado:', err);
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
   const handleOpenBought = () => {
@@ -129,7 +158,7 @@ export default function ActionFirstHomePage() {
           onTogglePaperMode={handleTogglePaperMode}
           onOpenQuickEntry={() => setIsQuickEntryOpen(true)}
         />
-        <RealBankrollOnboardingCard onSuccess={loadData} />
+        <RealBankrollOnboardingCard onSuccess={() => loadData()} />
       </main>
     );
   }
@@ -149,10 +178,12 @@ export default function ActionFirstHomePage() {
         actionResponse={actionResponse}
         isPaper={isPaperMode}
         loading={loading}
+        isVerifying={isVerifying}
+        lastVerifiedAt={lastVerifiedAt}
         onBoughtClick={handleOpenBought}
         onMissedClick={handleOpenMissed}
         onWhyClick={() => setIsWhyOpen(true)}
-        onRefresh={loadData}
+        onRefresh={handleVerifyMarket}
         onOpenQuickEntry={() => setIsQuickEntryOpen(true)}
       />
 
@@ -161,7 +192,7 @@ export default function ActionFirstHomePage() {
         goal={activeGoal}
         capital={capitalSummary}
         isPaper={isPaperMode}
-        onRefresh={loadData}
+        onRefresh={() => loadData()}
       />
 
       {/* 3. BALANÇO PATRIMONIAL & CAIXA (Sem dupla dedução) */}
@@ -169,14 +200,14 @@ export default function ActionFirstHomePage() {
         capital={capitalSummary}
         loading={loading}
         isPaper={isPaperMode}
-        onRefresh={loadData}
+        onRefresh={() => loadData()}
       />
 
       {/* 4. POSIÇÕES ABERTAS (Cartas compradas aguardando venda) */}
       <OpenPositionsList
         trades={openTrades}
         loading={loading}
-        onRefresh={loadData}
+        onRefresh={() => loadData()}
       />
 
       {/* Modais de Interação Humana */}
@@ -185,7 +216,7 @@ export default function ActionFirstHomePage() {
         action={actionResponse?.action || null}
         mode={feedbackMode}
         onClose={() => setIsFeedbackOpen(false)}
-        onSuccess={loadData}
+        onSuccess={() => loadData()}
       />
 
       <WhyExplanationModal
@@ -197,8 +228,9 @@ export default function ActionFirstHomePage() {
       <QuickObservationModal
         isOpen={isQuickEntryOpen}
         onClose={() => setIsQuickEntryOpen(false)}
-        onSuccess={loadData}
+        onSuccess={() => handleVerifyMarket()}
       />
     </main>
   );
 }
+

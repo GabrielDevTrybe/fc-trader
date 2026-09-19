@@ -133,6 +133,36 @@ class ObservationBatchResponse(BaseModel):
     analyses: list[OpportunityAnalysis]
 
 
+class MarketSnapshotRead(BaseModel):
+    id: UUID
+    card_id: UUID
+    platform: str = "console"
+    sample_count: int
+    valid_sample_count: int
+    min_price: int | None = None
+    max_price: int | None = None
+    median_price: int | None = None
+    p20_price: int | None = None
+    p80_price: int | None = None
+    robust_mean: float | None = None
+    std_dev: float
+    dispersion_ratio: float
+    estimated_market_price: int | None = None
+    conservative_buy_price: int | None = None
+    conservative_sell_price: int | None = None
+    confidence_score: float
+    confidence_level: str
+    freshness_status: str
+    newest_observation_age_seconds: int | None = None
+    trend: str = "NEUTRAL"
+    data_quality: str = "OK"
+    calculated_at: datetime
+    expires_at: datetime | None = None
+    data_origin: str = "user"
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class MarketOpportunityRead(BaseModel):
     id: UUID
     card_id: UUID
@@ -149,6 +179,9 @@ class MarketOpportunityRead(BaseModel):
     confidence: str
     liquidity_score: int
     opportunity_score: float
+    strategy_type: str = "QUICK_FLIP"
+    capital_efficiency: float | None = None
+    expected_holding_time_minutes: int | None = None
     data_origin: str = "user"
     detected_at: datetime
     expires_at: datetime | None = None
@@ -304,8 +337,10 @@ class ActionRecommendationRead(BaseModel):
     player_id: UUID | None = None
     trading_goal_id: UUID | None = None
     opportunity_id: UUID | None = None
+    market_snapshot_id: UUID | None = None
     action_type: str
     strategy_name: str
+    strategy_type: str = "QUICK_FLIP"
     player_name: str
     player_rating: int
 
@@ -323,6 +358,10 @@ class ActionRecommendationRead(BaseModel):
     estimated_profit_per_card: int
     estimated_total_profit: int
     estimated_roi: float
+    profit_at_max_buy: int | None = Field(None, description="Lucro líquido mínimo estimado comprando pelo teto max_buy")
+    roi_at_max_buy: float | None = Field(None, description="ROI líquido mínimo estimado comprando pelo teto max_buy")
+    capital_efficiency: float | None = None
+    expected_holding_time_minutes: int | None = None
     snapshot_market_price: int
     snapshot_observed_price: int
     snapshot_liquidity_score: int
@@ -330,6 +369,8 @@ class ActionRecommendationRead(BaseModel):
     snapshot_opportunity_score: float
     snapshot_sample_count: int
     snapshot_available_cash: int
+    market_data_age_seconds: int | None = None
+    no_action_reason_code: str | None = None
     why_explanation: str
     urgency: str
     status: str
@@ -348,3 +389,9 @@ class CurrentActionResponse(BaseModel):
     title: str | None = None
     message: str | None = None
     suggestion: str | None = None
+    no_action_reason_code: str | None = None
+
+
+class CsvBatchUploadRequest(BaseModel):
+    csv_content: str = Field(..., description="Conteúdo CSV em texto puro com cabeçalho")
+    data_origin: str = Field("user", description="Isolamento de dados: 'user' ou 'test'")

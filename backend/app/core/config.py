@@ -37,12 +37,36 @@ class Settings(BaseSettings):
     MAX_BANKROLL_PERCENTAGE_PER_TRADE: float = 0.20
     MINIMUM_CONFIDENCE: float = 0.60
 
-    # Phase 2: Action Engine & Risk Policy Configuration
+    # Phase 2 & 3: Action Engine & Risk Policy Configuration
     ACTION_RECOMMENDATION_TTL_MINUTES: int = 15
+    SNAPSHOT_VALIDITY_MINUTES: int = 15
     MARKET_PRICE_SHIFT_INVALIDATION_THRESHOLD: float = 0.05
     PORTFOLIO_MAX_INVENTORY_PERCENTAGE: float = 0.70
     PLAYER_MAX_CONCENTRATION_PERCENTAGE: float = 0.25
     MAX_OPEN_POSITIONS_PER_PLAYER: int = 3
+
+    # Observation Freshness Windows (Minutes)
+    OBSERVATION_FRESH_MINUTES: int = 15
+    OBSERVATION_STALE_MINUTES: int = 60
+    OBSERVATION_HISTORICAL_HOURS: int = 24
+
+    # Strategy-Dependent ROI & Profit Thresholds (Configurable initial baselines)
+    MINIMUM_ROI_QUICK_FLIP: float = 0.08      # 8% ROI for rapid turnover / sniping
+    MINIMUM_PROFIT_QUICK_FLIP: int = 100     # 100 coins net
+    MINIMUM_ROI_SWING: float = 0.15           # 15% ROI for standard flips
+    MINIMUM_PROFIT_SWING: int = 250          # 250 coins net
+    MINIMUM_ROI_INVESTMENT: float = 0.25      # 25% ROI for tactical holdings
+    MINIMUM_PROFIT_INVESTMENT: int = 500     # 500 coins net
+
+    # Market Intelligence & Confidence Scoring Parameters
+    MARKET_PRICE_IQR_MULTIPLIER: float = 1.5
+    MARKET_PRICE_MIN_SAMPLES: int = 3
+    MARKET_PRICE_MIN_SAMPLES_FOR_OUTLIERS: int = 5
+    CONFIDENCE_WEIGHT_SAMPLES: float = 0.30
+    CONFIDENCE_WEIGHT_FRESHNESS: float = 0.30
+    CONFIDENCE_WEIGHT_DISPERSION: float = 0.25
+    CONFIDENCE_WEIGHT_STABILITY: float = 0.15
+    MINIMUM_CONFIDENCE_FOR_ACTION: float = 0.50
 
     # Bankroll Tier Risk Allocation Percentages
     TIER_MICRO_MAX_PERCENTAGE: float = 0.30     # < 10.000 coins
