@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import math
+from uuid import UUID
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.entities import (
@@ -7,6 +9,7 @@ from app.models.entities import (
     CardExternalId,
     PriceObservation,
     MarketOpportunity,
+    MarketSnapshot,
     BankrollHistory,
 )
 from app.schemas.schemas import (
@@ -14,10 +17,10 @@ from app.schemas.schemas import (
     ObservationBatchResponse,
     OpportunityAnalysis,
 )
-from app.engines.market_price import MarketPriceEngine, PriceDataPoint
+from app.engines.market_intelligence import MarketIntelligenceEngine, MarketPriceDataPoint
+from app.engines.opportunity_discovery import OpportunityDiscoveryEngine
 from app.engines.liquidity import LiquidityAnalyzer
-from app.engines.trading import TradingEngine
-from app.engines.opportunity_score import OpportunityScoreEngine
+from app.providers.csv_provider import CSVMarketDataProvider
 from app.alerts.dashboard import DashboardAlertProvider
 from app.alerts.base import AlertNotification
 
@@ -30,16 +33,9 @@ class ObservationService:
     ) -> None:
         self.db = db
         self.alert_provider = alert_provider
-        self.price_engine = MarketPriceEngine()
+        self.market_intel = MarketIntelligenceEngine()
+        self.discovery_engine = OpportunityDiscoveryEngine(db=db)
         self.liquidity_analyzer = LiquidityAnalyzer()
-        self.trading_engine = TradingEngine(
-            tax_rate=settings.TRADING_TAX_RATE,
-            minimum_profit=settings.MINIMUM_PROFIT,
-            minimum_roi=settings.MINIMUM_ROI,
-            maximum_bankroll_percentage=settings.MAX_BANKROLL_PERCENTAGE_PER_TRADE,
-            minimum_confidence=settings.MINIMUM_CONFIDENCE,
-        )
-        self.score_engine = OpportunityScoreEngine()
 
     def get_current_bankroll(self, data_origin: str = "user") -> int:
         """Obtém o saldo atual de banca ou inicial padrão respeitando o isolamento."""
@@ -54,6 +50,42 @@ class ObservationService:
         )
         return latest.balance if latest else settings.INITIAL_BANKROLL
 
+    def process_csv_batch(self, csv_content: str, data_origin: str = "user") -> ObservationBatchResponse:
+        """Processa texto CSV em lote convertendo para ObservationBatchItems canônicos."""
+        csv_provider = CSVMarketDataProvider()
+        raw_items = csv_provider.parse_csv(csv_content, default_data_origin=data_origin)
+        batch_items: list[ObservationBatchItem] = []
+
+        for r in raw_items:
+            c_uuid = None
+            if r.card_id:
+                try:
+                    c_uuid = UUID(r.card_id)
+                except ValueError:
+                    c_uuid = None
+
+            batch_items.append(
+                ObservationBatchItem(
+                    player=r.player_name,
+                    rating=r.player_rating,
+                    price=r.price,
+                    type=r.observation_type,
+                    platform=r.platform,
+                    position=r.position,
+                    rarity=r.rarity,
+                    league=r.league,
+                    club=r.club,
+                    nation=r.nation,
+                    card_id=c_uuid,
+                    external_card_id=r.external_id,
+                    provider=r.provider,
+                    data_origin=r.data_origin,
+                    observed_at=r.observed_at,
+                )
+            )
+
+        return self.process_batch(batch_items)
+
     def process_batch(self, items: list[ObservationBatchItem]) -> ObservationBatchResponse:
         now = datetime.now(timezone.utc)
         analyses: list[OpportunityAnalysis] = []
@@ -66,7 +98,7 @@ class ObservationService:
             clean_name = item.player.strip()
             current_bankroll = self.get_current_bankroll(data_origin=item.data_origin)
 
-            # 1. Localiza ou cadastra o Jogador (Atleta humano)
+            # 1. Localiza ou cadastra o Atleta (Player)
             player = (
                 self.db.query(Player)
                 .filter(Player.name.ilike(clean_name))
@@ -103,7 +135,6 @@ class ObservationService:
                     card = ext.card
 
             if not card:
-                # Busca por identidade completa de versão: player_id + rating + clube + raridade
                 query = self.db.query(PlayerCard).filter(
                     PlayerCard.player_id == player.id,
                     PlayerCard.rating == item.rating,
@@ -130,7 +161,6 @@ class ObservationService:
                 self.db.add(card)
                 self.db.flush()
 
-                # Se fornecido ID externo, registra na tabela especializada de provedores
                 if item.external_card_id:
                     self.db.add(
                         CardExternalId(
@@ -141,7 +171,7 @@ class ObservationService:
                     )
                     self.db.flush()
 
-            # 3. Registra a observação vinculada à carta e à plataforma específica
+            # 3. Registra a observação preservando a proveniência semântica
             obs = PriceObservation(
                 card_id=card.id,
                 player_id=player.id,
@@ -155,13 +185,14 @@ class ObservationService:
             self.db.add(obs)
             self.db.flush()
 
-            # 4. Carrega histórico de preços estritamente desta CardVersion nesta plataforma
-            cutoff = now - timedelta(hours=48)
+            # 4. Carrega histórico de preços para computar inteligência estatística
+            cutoff = now - timedelta(hours=settings.OBSERVATION_HISTORICAL_HOURS)
             existing_obs = (
                 self.db.query(PriceObservation)
                 .filter(
                     PriceObservation.card_id == card.id,
                     PriceObservation.platform == (item.platform or "console"),
+                    PriceObservation.data_origin == item.data_origin,
                     PriceObservation.observed_at >= cutoff,
                 )
                 .order_by(PriceObservation.observed_at.desc())
@@ -169,43 +200,81 @@ class ObservationService:
                 .all()
             )
 
-            points = [
-                PriceDataPoint(
+            data_points = [
+                MarketPriceDataPoint(
                     price=o.price,
                     observed_at=o.observed_at,
                     observation_type=o.observation_type,
+                    source=o.source,
+                    platform=o.platform,
                 )
                 for o in existing_obs
             ]
 
-            # 5. Executa Motores Quantitativos Determinísticos
-            market_stats = self.price_engine.calculate_fair_price(points, reference_time=now)
-            liquidity = self.liquidity_analyzer.analyze(points, reference_time=now)
-
-            decision = self.trading_engine.evaluate(
-                observed_price=item.price,
-                market_stats=market_stats,
-                liquidity=liquidity,
-                bankroll=current_bankroll,
+            # 5. Executa MarketIntelligenceEngine (com expurgo de outliers IQR e pesos temporais)
+            snapshot_res = self.market_intel.compute_snapshot(
+                observations=data_points,
+                card_id=str(card.id),
+                platform=item.platform or "console",
+                reference_time=now,
             )
 
-            score_res = self.score_engine.calculate(
-                expected_roi=decision.expected_roi,
-                expected_profit=decision.expected_profit,
-                buy_price=item.price,
-                liquidity_score=liquidity.score,
-                confidence=decision.confidence,
-                bankroll=current_bankroll,
-                age_minutes=0.0,
+            # Persiste/Atualiza Snapshot Auditável no Banco
+            snapshot_entity = MarketSnapshot(
+                card_id=card.id,
+                platform=item.platform or "console",
+                sample_count=snapshot_res.sample_count,
+                valid_sample_count=snapshot_res.valid_sample_count,
+                min_price=snapshot_res.min_price,
+                max_price=snapshot_res.max_price,
+                median_price=snapshot_res.median_price,
+                p20_price=snapshot_res.p20_price,
+                p80_price=snapshot_res.p80_price,
+                robust_mean=snapshot_res.robust_mean,
+                std_dev=snapshot_res.std_dev,
+                dispersion_ratio=snapshot_res.dispersion_ratio,
+                estimated_market_price=snapshot_res.estimated_market_price,
+                conservative_buy_price=snapshot_res.conservative_buy_price,
+                conservative_sell_price=snapshot_res.conservative_sell_price,
+                confidence_score=snapshot_res.confidence_score,
+                confidence_level=snapshot_res.confidence_level,
+                freshness_status=snapshot_res.freshness_status,
+                newest_observation_age_seconds=snapshot_res.newest_observation_age_seconds,
+                trend=snapshot_res.trend,
+                data_quality=snapshot_res.data_quality,
+                calculated_at=now,
+                expires_at=now + timedelta(minutes=settings.SNAPSHOT_VALIDITY_MINUTES),
+                data_origin=item.data_origin,
+            )
+            self.db.add(snapshot_entity)
+            self.db.flush()
+
+            # 6. Avaliação de Oportunidade
+            liquidity = self.liquidity_analyzer.analyze(
+                [PriceObservation(price=p.price, observed_at=p.observed_at) for p in data_points],
+                reference_time=now,
             )
 
-            # 6. Atualiza ou cria Oportunidade vinculada à CardVersion e Plataforma
-            if decision.is_opportunity and decision.market_price is not None:
+            opp_eval = None
+            if snapshot_res.has_sufficient_data and snapshot_res.confidence_score >= settings.MINIMUM_CONFIDENCE_FOR_ACTION:
+                opp_eval = self.discovery_engine.evaluate_opportunity(
+                    card=card,
+                    snapshot=snapshot_res,
+                    liquidity_score=liquidity.score,
+                    latest_observation_price=item.price,
+                    available_cash=current_bankroll,
+                    max_allocation_cap=math.floor(current_bankroll * 0.25),
+                    snapshot_id=snapshot_entity.id,
+                )
+
+            # Atualiza ou cria MarketOpportunity
+            if opp_eval:
                 opp = (
                     self.db.query(MarketOpportunity)
                     .filter(
                         MarketOpportunity.card_id == card.id,
                         MarketOpportunity.platform == (item.platform or "console"),
+                        MarketOpportunity.data_origin == item.data_origin,
                     )
                     .first()
                 )
@@ -218,40 +287,43 @@ class ObservationService:
                     )
                     self.db.add(opp)
 
-                opp.observed_price = item.price
-                opp.market_price = decision.market_price
-                opp.max_buy_price = decision.max_buy_price
-                opp.target_sell_price = decision.target_sell_price
-                opp.estimated_profit = decision.expected_profit
-                opp.roi = decision.expected_roi
-                opp.confidence = decision.confidence
-                opp.liquidity_score = liquidity.score
-                opp.opportunity_score = score_res.score
+                opp.observed_price = opp_eval.observed_price
+                opp.market_price = opp_eval.estimated_market_price
+                opp.max_buy_price = opp_eval.max_buy_price
+                opp.target_sell_price = opp_eval.target_sell_price
+                opp.estimated_profit = opp_eval.net_profit
+                opp.roi = opp_eval.roi
+                opp.confidence = opp_eval.confidence_level
+                opp.liquidity_score = opp_eval.liquidity_score
+                opp.opportunity_score = opp_eval.ranking_score
+                opp.strategy_type = opp_eval.strategy_type
+                opp.capital_efficiency = opp_eval.capital_efficiency
+                opp.expected_holding_time_minutes = opp_eval.expected_holding_time_minutes
                 opp.detected_at = now
-                opp.expires_at = now + timedelta(minutes=30)
-                opp.data_origin = item.data_origin
+                opp.expires_at = now + timedelta(minutes=settings.ACTION_RECOMMENDATION_TTL_MINUTES)
+                self.db.flush()
 
-                # Alerta se houver provider configurado
+                # Notificação se oportunidade de alto impacto
                 if self.alert_provider and opp.opportunity_score >= 60.0:
                     self.alert_provider.notify(
                         AlertNotification(
                             type="OPPORTUNITY_DETECTED",
-                            title=f"Oportunidade: {player.name} ({card.rating}) - {card.club or ''}",
-                            message=f"Margem de lucro estimada em +{decision.expected_profit:,} coins (Score: {opp.opportunity_score:.1f})",
+                            title=f"Oportunidade: {player.name} ({card.rating}) - {opp.strategy_type}",
+                            message=f"Lucro líquido: +{opp_eval.net_profit:,} coins (Score: {opp.opportunity_score:.1f})",
                             data={
                                 "card_id": str(card.id),
                                 "player": player.name,
                                 "rating": card.rating,
                                 "version": card.rarity,
-                                "club": card.club,
                                 "platform": opp.platform,
                                 "buy": item.price,
-                                "market": decision.market_price,
-                                "profit": decision.expected_profit,
+                                "max_buy": opp.max_buy_price,
+                                "profit": opp_eval.net_profit,
                             },
                         )
                     )
 
+            # Análise para resposta do batch
             analyses.append(
                 OpportunityAnalysis(
                     card_id=card.id,
@@ -262,16 +334,16 @@ class ObservationService:
                     club=card.club,
                     platform=item.platform or "console",
                     observed_price=item.price,
-                    market_price=decision.market_price,
-                    max_buy_price=decision.max_buy_price,
-                    target_sell_price=decision.target_sell_price,
-                    expected_profit=decision.expected_profit,
-                    expected_roi=decision.expected_roi,
-                    confidence=decision.confidence,
+                    market_price=snapshot_res.estimated_market_price,
+                    max_buy_price=opp_eval.max_buy_price if opp_eval else 0,
+                    target_sell_price=opp_eval.target_sell_price if opp_eval else 0,
+                    expected_profit=opp_eval.net_profit if opp_eval else 0,
+                    expected_roi=opp_eval.roi if opp_eval else 0.0,
+                    confidence=snapshot_res.confidence_level,
                     liquidity_score=liquidity.score,
-                    opportunity_score=score_res.score,
-                    recommendation=decision.recommendation,
-                    reason=decision.reason,
+                    opportunity_score=opp_eval.ranking_score if opp_eval else 0.0,
+                    recommendation="BUY" if opp_eval else "PASS",
+                    reason=snapshot_res.reason if not opp_eval else f"Estratégia {opp_eval.strategy_type} viável",
                 )
             )
 

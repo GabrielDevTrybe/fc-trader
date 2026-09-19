@@ -18,9 +18,12 @@ const API_BASE_URL =
 async function fetchJson<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`;
   const response = await fetch(url, {
+    cache: 'no-store',
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
       ...options.headers,
     },
   });
@@ -108,6 +111,12 @@ export const api = {
     return fetchJson<CurrentActionResponse>(`/actions/current?is_paper=${isPaper}`);
   },
 
+  async verifyMarket(isPaper: boolean = false): Promise<CurrentActionResponse> {
+    return fetchJson<CurrentActionResponse>(`/actions/verify?is_paper=${isPaper}`, {
+      method: 'POST',
+    });
+  },
+
   async sendActionFeedback(payload: ActionFeedbackPayload): Promise<any> {
     return fetchJson<any>('/actions/feedback', {
       method: 'POST',
@@ -141,6 +150,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(items),
     });
+  },
+
+  async recordObservationsCsv(csvContent: string, dataOrigin: string = 'user'): Promise<ObservationBatchResponse> {
+    return fetchJson<ObservationBatchResponse>('/observations/batch/csv', {
+      method: 'POST',
+      body: JSON.stringify({ csv_content: csvContent, data_origin: dataOrigin }),
+    });
+  },
+
+  async getCardSnapshots(cardId: string, platform: string = 'console'): Promise<any[]> {
+    return fetchJson<any[]>(`/observations/snapshots/${cardId}?platform=${platform}`);
   },
 
   // Trades

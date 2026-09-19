@@ -5,6 +5,25 @@ from typing import Sequence
 
 
 @dataclass(frozen=True)
+class RawObservation:
+    player_name: str
+    player_rating: int
+    price: int
+    observation_type: str = "buy_now"
+    platform: str = "console"
+    position: str | None = None
+    rarity: str | None = None
+    league: str | None = None
+    club: str | None = None
+    nation: str | None = None
+    observed_at: datetime | None = None
+    provider: str = "manual"
+    external_id: str | None = None
+    card_id: str | None = None
+    data_origin: str = "user"
+
+
+@dataclass(frozen=True)
 class ProviderPricePoint:
     price: int
     observation_type: str  # "buy_now", "bid", "sale_estimate"

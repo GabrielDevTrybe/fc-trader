@@ -16,7 +16,7 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const [activeTab, setActiveTab] = useState<'single' | 'batch'>('single');
+  const [activeTab, setActiveTab] = useState<'single' | 'batch' | 'csv'>('single');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<OpportunityAnalysis[] | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -33,6 +33,16 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
   // Batch paste state
   const [batchRaw, setBatchRaw] = useState('');
 
+  // CSV paste state
+  const [csvRaw, setCsvRaw] = useState('');
+
+  const EXAMPLE_CSV = `player_name,rating,observed_price,observation_type,club,position,platform,source
+Vinicius Jr,89,32000,buy_now,Real Madrid,LW,console,USER_MARKET_CHECK
+Vinicius Jr,89,31500,bid,Real Madrid,LW,console,USER_MARKET_CHECK
+Rodri,89,31000,buy_now,Manchester City,CDM,console,USER_MARKET_CHECK
+Saliba,87,14000,buy_now,Arsenal,CB,console,USER_MARKET_CHECK
+Saliba,87,13500,bid,Arsenal,CB,console,USER_MARKET_CHECK`;
+
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -42,6 +52,16 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
     setResults(null);
 
     try {
+      if (activeTab === 'csv') {
+        if (!csvRaw.trim()) {
+          throw new Error('Cole o conteúdo CSV antes de enviar.');
+        }
+        const res = await api.recordObservationsCsv(csvRaw.trim());
+        setResults(res.analyses);
+        onSuccess();
+        return;
+      }
+
       let items: ObservationBatchItem[] = [];
 
       if (activeTab === 'single') {
@@ -85,7 +105,7 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content" style={{ maxWidth: '580px' }}>
+      <div className="modal-content" style={{ maxWidth: '620px' }}>
         <div className="modal-header">
           <div style={{ fontWeight: 700, fontSize: '15px' }}>ENTRADA RÁPIDA DE OBSERVAÇÕES</div>
           <button
@@ -111,7 +131,23 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
               cursor: 'pointer',
             }}
           >
-            OBSERVAÇÃO INDIVIDUAL
+            INDIVIDUAL
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('csv')}
+            style={{
+              flex: 1,
+              padding: '10px',
+              background: activeTab === 'csv' ? 'var(--bg-surface)' : 'transparent',
+              color: activeTab === 'csv' ? 'var(--text-primary)' : 'var(--text-muted)',
+              border: 'none',
+              fontWeight: 600,
+              fontSize: '12px',
+              cursor: 'pointer',
+            }}
+          >
+            LOTE CSV
           </button>
           <button
             type="button"
@@ -127,7 +163,7 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
               cursor: 'pointer',
             }}
           >
-            LOTE / BATCH JSON
+            LOTE JSON
           </button>
         </div>
 
@@ -228,6 +264,37 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
                   </div>
                 </div>
               </>
+            ) : activeTab === 'csv' ? (
+              <div className="form-group">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <label className="form-label" style={{ marginBottom: 0 }}>Importar Lote CSV</label>
+                  <button
+                    type="button"
+                    onClick={() => setCsvRaw(EXAMPLE_CSV)}
+                    style={{
+                      background: 'none',
+                      border: '1px dashed var(--border-subtle)',
+                      color: 'var(--accent-primary)',
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      fontSize: '11px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Carregar Exemplo
+                  </button>
+                </div>
+                <textarea
+                  className="input-terminal"
+                  style={{ minHeight: '160px', resize: 'vertical', fontFamily: 'var(--font-mono, monospace)', fontSize: '11px' }}
+                  value={csvRaw}
+                  onChange={(e) => setCsvRaw(e.target.value)}
+                  placeholder="player_name,rating,observed_price,observation_type,club,position,platform,source&#10;Vinicius Jr,89,32000,buy_now,Real Madrid,LW,console,USER_MARKET_CHECK"
+                />
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Colunas suportadas: <code>player_name, rating, observed_price, observation_type, club, position, platform, source</code>
+                </div>
+              </div>
             ) : (
               <div className="form-group">
                 <label className="form-label">Array JSON de Observações</label>

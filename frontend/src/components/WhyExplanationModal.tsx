@@ -85,11 +85,19 @@ export const WhyExplanationModal: React.FC<WhyExplanationModalProps> = ({
                 <span className="mono" style={{ fontWeight: '700', color: 'var(--accent-gold)' }}>{action.max_buy_price.toLocaleString()} coins</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-subtle)', paddingTop: '6px', fontSize: '14px' }}>
-                <span style={{ fontWeight: '700', color: '#fff' }}>Margem Líquida Garantida / Carta:</span>
+                <span style={{ fontWeight: '700', color: '#fff' }}>Lucro Mínimo Estimado no Teto / Carta:</span>
                 <span className="mono" style={{ fontWeight: '800', color: 'var(--accent-green)' }}>
-                  +{action.estimated_profit_per_card.toLocaleString()} coins ({action.estimated_roi.toFixed(1)}% ROI)
+                  +{(action.profit_at_max_buy ?? action.estimated_profit_per_card).toLocaleString()} coins ({((action.roi_at_max_buy ?? action.estimated_roi) * 100).toFixed(1)}% ROI)
                 </span>
               </div>
+              {action.snapshot_observed_price !== undefined && action.snapshot_observed_price !== null && action.snapshot_observed_price < action.max_buy_price && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-muted)', paddingTop: '4px' }}>
+                  <span>Na cotação recente ({action.snapshot_observed_price.toLocaleString()} coins):</span>
+                  <span className="mono" style={{ color: 'var(--text-secondary)' }}>
+                    +{action.estimated_profit_per_card.toLocaleString()} coins ({(action.estimated_roi * 100).toFixed(1)}% ROI)
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 

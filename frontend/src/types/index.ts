@@ -1,3 +1,5 @@
+export type StrategyType = 'QUICK_FLIP' | 'SWING' | 'INVESTMENT';
+
 export interface Player {
   id: string;
   name: string;
@@ -168,14 +170,44 @@ export interface ActionFeedbackPayload {
   notes?: string | null;
 }
 
+export interface MarketSnapshot {
+  id: string;
+  card_id: string;
+  platform: string;
+  sample_count: number;
+  valid_sample_count: number;
+  min_price?: number | null;
+  max_price?: number | null;
+  median_price?: number | null;
+  p20_price?: number | null;
+  p80_price?: number | null;
+  robust_mean?: number | null;
+  std_dev: number;
+  dispersion_ratio: number;
+  estimated_market_price?: number | null;
+  conservative_buy_price?: number | null;
+  conservative_sell_price?: number | null;
+  confidence_score: number;
+  confidence_level: string;
+  freshness_status: string;
+  newest_observation_age_seconds?: number | null;
+  trend: string;
+  data_quality: string;
+  calculated_at: string;
+  expires_at?: string | null;
+  data_origin: string;
+}
+
 export interface ActionRecommendation {
   id: string;
   card_id: string;
   player_id?: string | null;
   trading_goal_id?: string | null;
   opportunity_id?: string | null;
+  market_snapshot_id?: string | null;
   action_type: string;
   strategy_name: string;
+  strategy_type?: StrategyType | string;
   player_name: string;
   player_rating: number;
 
@@ -193,6 +225,10 @@ export interface ActionRecommendation {
   estimated_profit_per_card: number;
   estimated_total_profit: number;
   estimated_roi: number;
+  profit_at_max_buy?: number | null;
+  roi_at_max_buy?: number | null;
+  capital_efficiency?: number | null;
+  expected_holding_time_minutes?: number | null;
   snapshot_market_price: number;
   snapshot_observed_price: number;
   snapshot_liquidity_score: number;
@@ -200,6 +236,8 @@ export interface ActionRecommendation {
   snapshot_opportunity_score: number;
   snapshot_sample_count: number;
   snapshot_available_cash: number;
+  market_data_age_seconds?: number | null;
+  no_action_reason_code?: string | null;
   why_explanation: string;
   urgency: string;
   status: string;
@@ -216,6 +254,7 @@ export interface CurrentActionResponse {
   title?: string | null;
   message?: string | null;
   suggestion?: string | null;
+  no_action_reason_code?: string | null;
 }
 
 export interface OpportunityAnalysis {
