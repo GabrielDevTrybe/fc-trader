@@ -1,7 +1,9 @@
 'use client';
 
 import React from 'react';
-import { Activity, ShieldCheck } from 'lucide-react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { Activity, Flame, BarChart3 } from 'lucide-react';
 
 interface HeaderProps {
   apiConnected: boolean;
@@ -16,16 +18,57 @@ export const Header: React.FC<HeaderProps> = ({
   onTogglePaperMode,
   onOpenQuickEntry,
 }) => {
+  const pathname = usePathname();
+
   return (
     <header className="terminal-header">
       <div className="brand-area">
-        <div className="brand-badge">FC 27</div>
-        <div className="brand-title">
-          <span>FC TRADER</span>
-          <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 'normal' }}>
-            TERMINAL v1.0
-          </span>
-        </div>
+        <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: '14px', textDecoration: 'none' }}>
+          <div className="brand-badge">FC 27</div>
+          <div className="brand-title">
+            <span style={{ color: '#fff' }}>FC TRADER</span>
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'normal' }}>
+              ACTION v2.0
+            </span>
+          </div>
+        </Link>
+
+        {/* Navegação entre Cockpit de Ação e Terminal Analítico */}
+        <nav style={{ display: 'flex', gap: '6px', marginLeft: '20px' }}>
+          <Link
+            href="/"
+            className="btn-terminal"
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              background: pathname === '/' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+              borderColor: pathname === '/' ? 'var(--accent-green)' : 'transparent',
+              color: pathname === '/' ? 'var(--accent-green)' : 'var(--text-secondary)',
+              fontWeight: '700',
+              textDecoration: 'none',
+            }}
+          >
+            <Flame size={14} />
+            <span>Ação Agora</span>
+          </Link>
+
+          <Link
+            href="/advanced"
+            className="btn-terminal"
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              background: pathname === '/advanced' ? 'rgba(6, 182, 212, 0.15)' : 'transparent',
+              borderColor: pathname === '/advanced' ? 'var(--accent-cyan)' : 'transparent',
+              color: pathname === '/advanced' ? 'var(--accent-cyan)' : 'var(--text-secondary)',
+              fontWeight: '700',
+              textDecoration: 'none',
+            }}
+          >
+            <BarChart3 size={14} />
+            <span>Terminal Analítico</span>
+          </Link>
+        </nav>
       </div>
 
       <div className="header-status">

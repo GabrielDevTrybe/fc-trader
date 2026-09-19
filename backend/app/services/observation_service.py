@@ -1,7 +1,14 @@
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 from app.core.config import settings
-from app.models.entities import Player, PriceObservation, MarketOpportunity, BankrollHistory
+from app.models.entities import (
+    Player,
+    PlayerCard,
+    CardExternalId,
+    PriceObservation,
+    MarketOpportunity,
+    BankrollHistory,
+)
 from app.schemas.schemas import (
     ObservationBatchItem,
     ObservationBatchResponse,
@@ -34,11 +41,14 @@ class ObservationService:
         )
         self.score_engine = OpportunityScoreEngine()
 
-    def get_current_bankroll(self) -> int:
-        """Obtém o saldo atual de banca ou inicial padrão."""
+    def get_current_bankroll(self, data_origin: str = "user") -> int:
+        """Obtém o saldo atual de banca ou inicial padrão respeitando o isolamento."""
         latest = (
             self.db.query(BankrollHistory)
-            .filter(BankrollHistory.is_paper.is_(False))
+            .filter(
+                BankrollHistory.is_paper.is_(False),
+                BankrollHistory.data_origin == data_origin,
+            )
             .order_by(BankrollHistory.recorded_at.desc())
             .first()
         )
@@ -46,13 +56,7 @@ class ObservationService:
 
     def process_batch(self, items: list[ObservationBatchItem]) -> ObservationBatchResponse:
         now = datetime.now(timezone.utc)
-        current_bankroll = self.get_current_bankroll()
         analyses: list[OpportunityAnalysis] = []
-
-        # Cache local de jogadores durante o lote para evitar roundtrips redundantes
-        player_cache: dict[tuple[str, int], Player] = {}
-        # Histórico recente em memória por jogador
-        obs_points_by_player: dict[tuple[str, int], list[PriceDataPoint]] = {}
 
         for item in items:
             obs_time = item.observed_at or now
@@ -60,75 +64,121 @@ class ObservationService:
                 obs_time = obs_time.replace(tzinfo=timezone.utc)
 
             clean_name = item.player.strip()
-            cache_key = (clean_name.lower(), item.rating)
+            current_bankroll = self.get_current_bankroll(data_origin=item.data_origin)
 
-            if cache_key not in player_cache:
-                player = (
-                    self.db.query(Player)
+            # 1. Localiza ou cadastra o Jogador (Atleta humano)
+            player = (
+                self.db.query(Player)
+                .filter(Player.name.ilike(clean_name))
+                .first()
+            )
+            if not player:
+                player = Player(
+                    name=clean_name,
+                    nation=item.nation,
+                    rating=item.rating,
+                    position=item.position,
+                    rarity=item.rarity,
+                    league=item.league,
+                    club=item.club,
+                    data_origin=item.data_origin,
+                )
+                self.db.add(player)
+                self.db.flush()
+
+            # 2. Resolução Canônica da CardVersion (PlayerCard)
+            card = None
+            if item.card_id:
+                card = self.db.query(PlayerCard).filter(PlayerCard.id == item.card_id).first()
+            elif item.external_card_id:
+                ext = (
+                    self.db.query(CardExternalId)
                     .filter(
-                        Player.name.ilike(clean_name),
-                        Player.rating == item.rating,
+                        CardExternalId.provider == item.provider,
+                        CardExternalId.external_id == item.external_card_id,
                     )
                     .first()
                 )
-                if not player:
-                    player = Player(
-                        name=clean_name,
-                        rating=item.rating,
-                        position=item.position,
-                        rarity=item.rarity,
-                        league=item.league,
-                        club=item.club,
-                        nation=item.nation,
-                    )
-                    self.db.add(player)
-                    self.db.flush()
-                player_cache[cache_key] = player
+                if ext:
+                    card = ext.card
 
-                # Carrega pontos recentes do banco uma única vez para este jogador
-                cutoff = now - timedelta(hours=48)
-                existing_obs = (
-                    self.db.query(PriceObservation)
-                    .filter(
-                        PriceObservation.player_id == player.id,
-                        PriceObservation.observed_at >= cutoff,
-                    )
-                    .order_by(PriceObservation.observed_at.desc())
-                    .limit(50)
-                    .all()
+            if not card:
+                # Busca por identidade completa de versão: player_id + rating + clube + raridade
+                query = self.db.query(PlayerCard).filter(
+                    PlayerCard.player_id == player.id,
+                    PlayerCard.rating == item.rating,
                 )
-                obs_points_by_player[cache_key] = [
-                    PriceDataPoint(
-                        price=o.price,
-                        observed_at=o.observed_at,
-                        observation_type=o.observation_type,
+                if item.club:
+                    query = query.filter(PlayerCard.club.ilike(item.club.strip()))
+                if item.rarity:
+                    query = query.filter(PlayerCard.rarity.ilike(item.rarity.strip()))
+
+                card = query.first()
+
+            if not card:
+                card = PlayerCard(
+                    player_id=player.id,
+                    game_version="FC27",
+                    rating=item.rating,
+                    position=item.position or player.position,
+                    rarity=item.rarity or player.rarity or "Gold",
+                    club=item.club or player.club,
+                    league=item.league or player.league,
+                    nation=item.nation or player.nation,
+                    data_origin=item.data_origin,
+                )
+                self.db.add(card)
+                self.db.flush()
+
+                # Se fornecido ID externo, registra na tabela especializada de provedores
+                if item.external_card_id:
+                    self.db.add(
+                        CardExternalId(
+                            card_id=card.id,
+                            provider=item.provider,
+                            external_id=item.external_card_id,
+                        )
                     )
-                    for o in existing_obs
-                ]
+                    self.db.flush()
 
-            player = player_cache[cache_key]
-
-            # Armazena observação no banco
+            # 3. Registra a observação vinculada à carta e à plataforma específica
             obs = PriceObservation(
+                card_id=card.id,
                 player_id=player.id,
                 price=item.price,
                 observation_type=item.type,
-                source="manual",
+                platform=item.platform or "console",
+                source=item.provider or "manual",
+                data_origin=item.data_origin,
                 observed_at=obs_time,
             )
             self.db.add(obs)
+            self.db.flush()
 
-            # Adiciona ao histórico em memória para recálculo imediato
-            point = PriceDataPoint(
-                price=item.price,
-                observed_at=obs_time,
-                observation_type=item.type,
+            # 4. Carrega histórico de preços estritamente desta CardVersion nesta plataforma
+            cutoff = now - timedelta(hours=48)
+            existing_obs = (
+                self.db.query(PriceObservation)
+                .filter(
+                    PriceObservation.card_id == card.id,
+                    PriceObservation.platform == (item.platform or "console"),
+                    PriceObservation.observed_at >= cutoff,
+                )
+                .order_by(PriceObservation.observed_at.desc())
+                .limit(50)
+                .all()
             )
-            obs_points_by_player[cache_key].insert(0, point)
 
-            points = obs_points_by_player[cache_key]
+            points = [
+                PriceDataPoint(
+                    price=o.price,
+                    observed_at=o.observed_at,
+                    observation_type=o.observation_type,
+                )
+                for o in existing_obs
+            ]
 
-            # Executa Engines
+            # 5. Executa Motores Quantitativos Determinísticos
             market_stats = self.price_engine.calculate_fair_price(points, reference_time=now)
             liquidity = self.liquidity_analyzer.analyze(points, reference_time=now)
 
@@ -149,48 +199,68 @@ class ObservationService:
                 age_minutes=0.0,
             )
 
-            # Se houver preço justo, agenda atualização da oportunidade
-            if decision.market_price:
-                self.db.query(MarketOpportunity).filter(
-                    MarketOpportunity.player_id == player.id
-                ).delete()
-
-                opp_record = MarketOpportunity(
-                    player_id=player.id,
-                    observed_price=item.price,
-                    market_price=decision.market_price,
-                    max_buy_price=decision.max_buy_price,
-                    target_sell_price=decision.target_sell_price,
-                    estimated_profit=decision.expected_profit,
-                    roi=decision.expected_roi,
-                    confidence=decision.confidence,
-                    liquidity_score=liquidity.score,
-                    opportunity_score=score_res.score,
-                    detected_at=now,
-                    expires_at=now + timedelta(minutes=45),
+            # 6. Atualiza ou cria Oportunidade vinculada à CardVersion e Plataforma
+            if decision.is_opportunity and decision.market_price is not None:
+                opp = (
+                    self.db.query(MarketOpportunity)
+                    .filter(
+                        MarketOpportunity.card_id == card.id,
+                        MarketOpportunity.platform == (item.platform or "console"),
+                    )
+                    .first()
                 )
-                self.db.add(opp_record)
+                if not opp:
+                    opp = MarketOpportunity(
+                        card_id=card.id,
+                        player_id=player.id,
+                        platform=item.platform or "console",
+                        data_origin=item.data_origin,
+                    )
+                    self.db.add(opp)
 
-                if decision.is_opportunity and self.alert_provider:
-                    self.alert_provider.send_alert(
+                opp.observed_price = item.price
+                opp.market_price = decision.market_price
+                opp.max_buy_price = decision.max_buy_price
+                opp.target_sell_price = decision.target_sell_price
+                opp.estimated_profit = decision.expected_profit
+                opp.roi = decision.expected_roi
+                opp.confidence = decision.confidence
+                opp.liquidity_score = liquidity.score
+                opp.opportunity_score = score_res.score
+                opp.detected_at = now
+                opp.expires_at = now + timedelta(minutes=30)
+                opp.data_origin = item.data_origin
+
+                # Alerta se houver provider configurado
+                if self.alert_provider and opp.opportunity_score >= 60.0:
+                    self.alert_provider.notify(
                         AlertNotification(
-                            player_name=player.name,
-                            rating=player.rating,
-                            observed_price=item.price,
-                            market_price=decision.market_price,
-                            expected_profit=decision.expected_profit,
-                            expected_roi=decision.expected_roi,
-                            confidence=decision.confidence,
-                            opportunity_score=score_res.score,
-                            created_at=now,
+                            type="OPPORTUNITY_DETECTED",
+                            title=f"Oportunidade: {player.name} ({card.rating}) - {card.club or ''}",
+                            message=f"Margem de lucro estimada em +{decision.expected_profit:,} coins (Score: {opp.opportunity_score:.1f})",
+                            data={
+                                "card_id": str(card.id),
+                                "player": player.name,
+                                "rating": card.rating,
+                                "version": card.rarity,
+                                "club": card.club,
+                                "platform": opp.platform,
+                                "buy": item.price,
+                                "market": decision.market_price,
+                                "profit": decision.expected_profit,
+                            },
                         )
                     )
 
             analyses.append(
                 OpportunityAnalysis(
+                    card_id=card.id,
                     player_id=player.id,
                     player_name=player.name,
-                    rating=player.rating,
+                    rating=card.rating,
+                    version_name=card.rarity,
+                    club=card.club,
+                    platform=item.platform or "console",
                     observed_price=item.price,
                     market_price=decision.market_price,
                     max_buy_price=decision.max_buy_price,
@@ -206,7 +276,4 @@ class ObservationService:
             )
 
         self.db.commit()
-        return ObservationBatchResponse(
-            processed_count=len(analyses),
-            analyses=analyses,
-        )
+        return ObservationBatchResponse(processed_count=len(analyses), analyses=analyses)

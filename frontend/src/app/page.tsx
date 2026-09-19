@@ -2,35 +2,38 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import { api } from '@/lib/api';
-import { BankrollSummary, MarketOpportunity, Trade } from '@/types';
+import {
+  CurrentActionResponse,
+  TradingGoal,
+  BankrollCapitalSummary,
+  Trade,
+} from '@/types';
 import { Header } from '@/components/Header';
-import { BankrollCard } from '@/components/BankrollCard';
-import { MilestoneProgress } from '@/components/MilestoneProgress';
-import { LiveOpportunitiesTable } from '@/components/LiveOpportunitiesTable';
-import { TradesHistoryTable } from '@/components/TradesHistoryTable';
+import { ActionHeroCard } from '@/components/ActionHeroCard';
+import { RealBankrollOnboardingCard } from '@/components/RealBankrollOnboardingCard';
+import { GoalProgressCard } from '@/components/GoalProgressCard';
+import { BankrollCapitalCard } from '@/components/BankrollCapitalCard';
+import { OpenPositionsList } from '@/components/OpenPositionsList';
+import { ActionFeedbackModal } from '@/components/ActionFeedbackModal';
+import { WhyExplanationModal } from '@/components/WhyExplanationModal';
 import { QuickObservationModal } from '@/components/QuickObservationModal';
-import { PaperTradeModal } from '@/components/PaperTradeModal';
-import { Search, Filter, RefreshCw } from 'lucide-react';
 
-export default function DashboardPage() {
+export default function ActionFirstHomePage() {
   const [apiConnected, setApiConnected] = useState(false);
   const [isPaperMode, setIsPaperMode] = useState(true);
   const [loading, setLoading] = useState(true);
 
-  const [bankrollSummary, setBankrollSummary] = useState<BankrollSummary | null>(null);
-  const [opportunities, setOpportunities] = useState<MarketOpportunity[]>([]);
-  const [trades, setTrades] = useState<Trade[]>([]);
+  // Phase 2 Data States
+  const [actionResponse, setActionResponse] = useState<CurrentActionResponse | null>(null);
+  const [activeGoal, setActiveGoal] = useState<TradingGoal | null>(null);
+  const [capitalSummary, setCapitalSummary] = useState<BankrollCapitalSummary | null>(null);
+  const [openTrades, setOpenTrades] = useState<Trade[]>([]);
 
-  // Filter state
-  const [playerFilter, setPlayerFilter] = useState('');
-  const [minRatingFilter, setMinRatingFilter] = useState('');
-  const [minProfitFilter, setMinProfitFilter] = useState('');
-
-  // Modals state
+  // Modals
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
+  const [feedbackMode, setFeedbackMode] = useState<'BOUGHT' | 'MISSED'>('BOUGHT');
+  const [isWhyOpen, setIsWhyOpen] = useState(false);
   const [isQuickEntryOpen, setIsQuickEntryOpen] = useState(false);
-  const [isPaperTradeModalOpen, setIsPaperTradeModalOpen] = useState(false);
-  const [selectedOppForTrade, setSelectedOppForTrade] = useState<MarketOpportunity | null>(null);
-  const [tradeToClose, setTradeToClose] = useState<Trade | null>(null);
 
   const loadData = useCallback(async () => {
     try {
@@ -42,135 +45,158 @@ export default function DashboardPage() {
         setApiConnected(false);
       }
 
-      // 2. Bankroll
-      const bSummary = await api.getBankroll(isPaperMode);
-      setBankrollSummary(bSummary);
+      // 2. Capital Breakdown
+      const cap = await api.getCapitalSummary(isPaperMode);
+      setCapitalSummary(cap);
 
-      // 3. Opportunities
-      const opps = await api.getOpportunities({
-        player: playerFilter.trim() || undefined,
-        min_rating: minRatingFilter ? parseInt(minRatingFilter, 10) : undefined,
-        min_profit: minProfitFilter ? parseInt(minProfitFilter, 10) : undefined,
-      });
-      setOpportunities(opps);
+      // 3. Active Goal
+      try {
+        const goal = await api.getActiveGoal(isPaperMode);
+        setActiveGoal(goal);
+      } catch {
+        setActiveGoal(null);
+      }
 
-      // 4. Trades
-      const tList = await api.getTrades(isPaperMode);
-      setTrades(tList);
+      // 4. Current Action
+      const act = await api.getCurrentAction(isPaperMode);
+      setActionResponse(act);
+
+      // 5. Open Positions
+      const tList = await api.getTrades(isPaperMode, 'open');
+      setOpenTrades(tList);
     } catch (err) {
-      console.error('Falha ao carregar dados do dashboard:', err);
+      console.error('Falha ao carregar dados do Cockpit de Ação:', err);
     } finally {
       setLoading(false);
     }
-  }, [isPaperMode, playerFilter, minRatingFilter, minProfitFilter]);
+  }, [isPaperMode]);
 
   // Initial load and polling
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 5000); // Polling simples a cada 5s
+    const interval = setInterval(loadData, 4000); // Polling a cada 4 segundos
     return () => clearInterval(interval);
   }, [loadData]);
 
-  const handleOpenTradeModal = (opp: MarketOpportunity) => {
-    setSelectedOppForTrade(opp);
-    setTradeToClose(null);
-    setIsPaperTradeModalOpen(true);
+  const handleTogglePaperMode = (paper: boolean) => {
+    setIsPaperMode(paper);
+    setLoading(true);
+    setActionResponse(null);
+    setCapitalSummary(null);
+    setActiveGoal(null);
+    setOpenTrades([]);
   };
 
-  const handleCloseTradeModal = (trade: Trade) => {
-    setSelectedOppForTrade(null);
-    setTradeToClose(trade);
-    setIsPaperTradeModalOpen(true);
+  const handleOpenBought = () => {
+    setFeedbackMode('BOUGHT');
+    setIsFeedbackOpen(true);
   };
 
+  const handleOpenMissed = () => {
+    setFeedbackMode('MISSED');
+    setIsFeedbackOpen(true);
+  };
+
+  // Verifica se a banca real está desconfigurada
+  // No modo REAL, a banca é considerada NÃO configurada a menos que capitalSummary?.is_configured seja explicitamente true.
+  const isRealBankrollUnconfigured = !isPaperMode && capitalSummary?.is_configured !== true;
+
+  // 1. ESTADO DE CARREGAMENTO INICIAL
+  if (loading && capitalSummary === null) {
+    return (
+      <main className="container">
+        <Header
+          apiConnected={apiConnected}
+          isPaperMode={isPaperMode}
+          onTogglePaperMode={handleTogglePaperMode}
+          onOpenQuickEntry={() => setIsQuickEntryOpen(true)}
+        />
+        <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--text-muted)' }}>
+          <div style={{ fontSize: '14px', fontWeight: 600 }}>Carregando estado do terminal...</div>
+        </div>
+      </main>
+    );
+  }
+
+  // 2. ESTADO ESTRUTURAL EXCLUSIVO: ONBOARDING OBRIGATÓRIO DA BANCA REAL
+  // Nenhum componente operacional (ActionHero, Metas, Balanço, Posições) é montado enquanto não configurado.
+  if (isRealBankrollUnconfigured) {
+    return (
+      <main className="container">
+        <Header
+          apiConnected={apiConnected}
+          isPaperMode={isPaperMode}
+          onTogglePaperMode={handleTogglePaperMode}
+          onOpenQuickEntry={() => setIsQuickEntryOpen(true)}
+        />
+        <RealBankrollOnboardingCard onSuccess={loadData} />
+      </main>
+    );
+  }
+
+  // 3. ESTADO OPERACIONAL NORMAL (Banca Real Configurada ou Paper Trading)
   return (
     <main className="container">
       <Header
         apiConnected={apiConnected}
         isPaperMode={isPaperMode}
-        onTogglePaperMode={(paper) => setIsPaperMode(paper)}
+        onTogglePaperMode={handleTogglePaperMode}
         onOpenQuickEntry={() => setIsQuickEntryOpen(true)}
       />
 
-      {/* Métricas de Banca */}
-      <BankrollCard summary={bankrollSummary} loading={loading} />
-
-      {/* Progressão de Metas */}
-      {bankrollSummary && (
-        <MilestoneProgress
-          milestones={bankrollSummary.milestones}
-          currentBalance={bankrollSummary.balance}
-        />
-      )}
-
-      {/* Barra de Filtros e Busca */}
-      <div className="actions-bar">
-        <div className="search-filter-group">
-          <div style={{ position: 'relative', flex: 2 }}>
-            <input
-              className="input-terminal"
-              placeholder="Buscar jogador (ex: Palhinha)..."
-              value={playerFilter}
-              onChange={(e) => setPlayerFilter(e.target.value)}
-              style={{ paddingLeft: '34px' }}
-            />
-            <Search
-              size={15}
-              style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}
-            />
-          </div>
-
-          <input
-            className="input-terminal"
-            type="number"
-            placeholder="Min Rating (ex: 80)"
-            value={minRatingFilter}
-            onChange={(e) => setMinRatingFilter(e.target.value)}
-            style={{ flex: 1 }}
-          />
-
-          <input
-            className="input-terminal"
-            type="number"
-            placeholder="Min Profit (coins)"
-            value={minProfitFilter}
-            onChange={(e) => setMinProfitFilter(e.target.value)}
-            style={{ flex: 1 }}
-          />
-        </div>
-
-        <button onClick={loadData} className="btn-terminal" title="Atualizar dados agora">
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          <span>Atualizar</span>
-        </button>
-      </div>
-
-      {/* Tabela de Oportunidades Vivas */}
-      <LiveOpportunitiesTable
-        opportunities={opportunities}
+      {/* 1. HERO ACTION CARD: A resposta imediata para "O que fazer agora" */}
+      <ActionHeroCard
+        actionResponse={actionResponse}
+        isPaper={isPaperMode}
         loading={loading}
-        onOpenTrade={handleOpenTradeModal}
+        onBoughtClick={handleOpenBought}
+        onMissedClick={handleOpenMissed}
+        onWhyClick={() => setIsWhyOpen(true)}
+        onRefresh={loadData}
+        onOpenQuickEntry={() => setIsQuickEntryOpen(true)}
       />
 
-      {/* Histórico de Trades e Paper Trading */}
-      <TradesHistoryTable
-        trades={trades}
-        loading={loading}
-        onCloseTrade={handleCloseTradeModal}
+      {/* 2. PROGRESSÃO DA META ATIVA */}
+      <GoalProgressCard
+        goal={activeGoal}
+        capital={capitalSummary}
+        isPaper={isPaperMode}
+        onRefresh={loadData}
       />
 
-      {/* Modais */}
-      <QuickObservationModal
-        isOpen={isQuickEntryOpen}
-        onClose={() => setIsQuickEntryOpen(false)}
+      {/* 3. BALANÇO PATRIMONIAL & CAIXA (Sem dupla dedução) */}
+      <BankrollCapitalCard
+        capital={capitalSummary}
+        loading={loading}
+        isPaper={isPaperMode}
+        onRefresh={loadData}
+      />
+
+      {/* 4. POSIÇÕES ABERTAS (Cartas compradas aguardando venda) */}
+      <OpenPositionsList
+        trades={openTrades}
+        loading={loading}
+        onRefresh={loadData}
+      />
+
+      {/* Modais de Interação Humana */}
+      <ActionFeedbackModal
+        isOpen={isFeedbackOpen}
+        action={actionResponse?.action || null}
+        mode={feedbackMode}
+        onClose={() => setIsFeedbackOpen(false)}
         onSuccess={loadData}
       />
 
-      <PaperTradeModal
-        isOpen={isPaperTradeModalOpen}
-        opportunity={selectedOppForTrade}
-        tradeToClose={tradeToClose}
-        onClose={() => setIsPaperTradeModalOpen(false)}
+      <WhyExplanationModal
+        isOpen={isWhyOpen}
+        action={actionResponse?.action || null}
+        onClose={() => setIsWhyOpen(false)}
+      />
+
+      <QuickObservationModal
+        isOpen={isQuickEntryOpen}
+        onClose={() => setIsQuickEntryOpen(false)}
         onSuccess={loadData}
       />
     </main>

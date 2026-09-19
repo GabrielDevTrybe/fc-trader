@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { api } from '@/lib/api';
 import { ObservationBatchItem, OpportunityAnalysis } from '@/types';
-import { X, Send, CheckCircle2, AlertCircle } from 'lucide-react';
+import { X, Plus, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface QuickObservationModalProps {
   isOpen: boolean;
@@ -21,26 +21,17 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
   const [results, setResults] = useState<OpportunityAnalysis[] | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Single form state
-  const [player, setPlayer] = useState('Palhinha');
-  const [rating, setRating] = useState('82');
-  const [price, setPrice] = useState('600');
+  // Single form state - Inicializa limpo e genérico
+  const [player, setPlayer] = useState('');
+  const [rating, setRating] = useState('');
+  const [price, setPrice] = useState('');
   const [type, setType] = useState<'buy_now' | 'bid'>('bid');
-  const [position, setPosition] = useState('CDM');
+  const [position, setPosition] = useState('');
+  const [club, setClub] = useState('');
+  const [platform, setPlatform] = useState<'console' | 'pc'>('console');
 
   // Batch paste state
-  const [batchRaw, setBatchRaw] = useState(
-    JSON.stringify(
-      [
-        { player: 'Palhinha', rating: 82, price: 1000, type: 'buy_now', position: 'CDM' },
-        { player: 'Palhinha', rating: 82, price: 1050, type: 'buy_now', position: 'CDM' },
-        { player: 'Palhinha', rating: 82, price: 1050, type: 'buy_now', position: 'CDM' },
-        { player: 'Palhinha', rating: 82, price: 600, type: 'bid', position: 'CDM' },
-      ],
-      null,
-      2
-    )
-  );
+  const [batchRaw, setBatchRaw] = useState('');
 
   if (!isOpen) return null;
 
@@ -64,21 +55,29 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
             price: parseInt(price, 10),
             type: type,
             position: position.trim() || undefined,
+            club: club.trim() || undefined,
+            platform: platform,
           },
         ];
       } else {
-        const parsed = JSON.parse(batchRaw);
-        if (!Array.isArray(parsed)) {
-          throw new Error('O formato em lote deve ser um array JSON de observações');
+        if (!batchRaw.trim()) {
+          throw new Error('Cole o JSON com o lote de observações');
         }
-        items = parsed;
+        try {
+          items = JSON.parse(batchRaw);
+          if (!Array.isArray(items)) {
+            throw new Error('O JSON deve ser um array de observações');
+          }
+        } catch (err: any) {
+          throw new Error('Formato JSON inválido: ' + err.message);
+        }
       }
 
       const res = await api.recordObservations(items);
       setResults(res.analyses);
       onSuccess();
     } catch (err: any) {
-      setErrorMessage(err.message || 'Erro ao registrar observação');
+      setErrorMessage(err.message || 'Erro ao processar observações');
     } finally {
       setLoading(false);
     }
@@ -86,7 +85,7 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content">
+      <div className="modal-content" style={{ maxWidth: '580px' }}>
         <div className="modal-header">
           <div style={{ fontWeight: 700, fontSize: '15px' }}>ENTRADA RÁPIDA DE OBSERVAÇÕES</div>
           <button
@@ -144,26 +143,48 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
             {activeTab === 'single' ? (
               <>
                 <div className="form-row">
-                  <div className="form-group">
+                  <div className="form-group" style={{ flex: 2 }}>
                     <label className="form-label">Jogador</label>
                     <input
                       className="input-terminal"
                       value={player}
                       onChange={(e) => setPlayer(e.target.value)}
-                      placeholder="Ex: Palhinha"
+                      placeholder="Ex: Vinicius Jr, Mbappé..."
                       required
                     />
                   </div>
-                  <div className="form-group">
-                    <label className="form-label">Rating (Overall)</label>
+                  <div className="form-group" style={{ flex: 1 }}>
+                    <label className="form-label">Rating</label>
                     <input
                       className="input-terminal"
                       type="number"
                       value={rating}
                       onChange={(e) => setRating(e.target.value)}
+                      placeholder="Ex: 85"
                       min="40"
                       max="99"
                       required
+                    />
+                  </div>
+                </div>
+
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="form-label">Clube / Time (Opcional)</label>
+                    <input
+                      className="input-terminal"
+                      value={club}
+                      onChange={(e) => setClub(e.target.value)}
+                      placeholder="Ex: Real Madrid, Benfica, etc."
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Posição (Opcional)</label>
+                    <input
+                      className="input-terminal"
+                      value={position}
+                      onChange={(e) => setPosition(e.target.value)}
+                      placeholder="Ex: CDM, ST, RW"
                     />
                   </div>
                 </div>
@@ -176,13 +197,14 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
                       type="number"
                       value={price}
                       onChange={(e) => setPrice(e.target.value)}
+                      placeholder="Ex: 1200"
                       min="100"
-                      step="50"
+                      step="1"
                       required
                     />
                   </div>
                   <div className="form-group">
-                    <label className="form-label">Tipo de Observação</label>
+                    <label className="form-label">Tipo</label>
                     <select
                       className="input-terminal"
                       value={type}
@@ -193,16 +215,17 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
                       <option value="sale_estimate">Estimativa de Venda</option>
                     </select>
                   </div>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Posição (Opcional)</label>
-                  <input
-                    className="input-terminal"
-                    value={position}
-                    onChange={(e) => setPosition(e.target.value)}
-                    placeholder="Ex: CDM, RW, ST"
-                  />
+                  <div className="form-group">
+                    <label className="form-label">Plataforma</label>
+                    <select
+                      className="input-terminal"
+                      value={platform}
+                      onChange={(e) => setPlatform(e.target.value as any)}
+                    >
+                      <option value="console">Console</option>
+                      <option value="pc">PC</option>
+                    </select>
+                  </div>
                 </div>
               </>
             ) : (
@@ -213,38 +236,42 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
                   style={{ minHeight: '140px', resize: 'vertical' }}
                   value={batchRaw}
                   onChange={(e) => setBatchRaw(e.target.value)}
-                  placeholder="[{ player: 'Palhinha', rating: 82, price: 600, type: 'bid' }]"
+                  placeholder='[&#10;  { "player": "Nome", "rating": 84, "price": 1200, "type": "bid", "club": "Clube", "platform": "console" }&#10;]'
                 />
               </div>
             )}
 
             {results && results.length > 0 && (
-              <div style={{ marginTop: '12px', borderTop: '1px solid var(--border-subtle)', paddingTop: '12px' }}>
-                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>
-                  RESULTADO DO PIPELINE:
+              <div style={{ marginTop: '16px', borderTop: '1px solid var(--border-subtle)', paddingTop: '12px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                  RESULTADO DA ANÁLISE INSTANTÂNEA ({results.length}):
                 </div>
-                {results.map((r, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      background: 'var(--bg-surface-elevated)',
-                      padding: '10px',
-                      borderRadius: '6px',
-                      fontSize: '12px',
-                      marginBottom: '6px',
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                      <strong>{r.player_name} ({r.rating})</strong>
-                      <span className={`badge ${r.recommendation === 'BUY' ? 'green' : 'gold'}`}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto' }}>
+                  {results.map((r, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        background: 'var(--bg-surface-elevated)',
+                        padding: '8px 12px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <div>
+                        <strong>{r.player_name} ({r.rating})</strong> {r.club ? `• ${r.club}` : ''}
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                          Obs: {r.observed_price.toLocaleString()} | Justo: {r.market_price ? `${r.market_price.toLocaleString()} coins` : 'Calculando...'}
+                        </div>
+                      </div>
+                      <span className={`badge ${r.recommendation === 'BUY' ? 'green' : r.recommendation === 'WATCH' ? 'gold' : 'gray'}`}>
                         {r.recommendation}
                       </span>
                     </div>
-                    <div style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>
-                      {r.reason}
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -253,9 +280,12 @@ export const QuickObservationModal: React.FC<QuickObservationModalProps> = ({
             <button type="button" onClick={onClose} className="btn-terminal">
               Fechar
             </button>
-            <button type="submit" disabled={loading} className="btn-terminal primary">
-              <Send size={13} />
-              <span>{loading ? 'Processando...' : 'Processar Observação'}</span>
+            <button
+              type="submit"
+              className="btn-terminal primary"
+              disabled={loading}
+            >
+              {loading ? 'Processando...' : 'Registrar Observações'}
             </button>
           </div>
         </form>

@@ -74,7 +74,7 @@ export const TradesHistoryTable: React.FC<TradesHistoryTableProps> = ({
                       </span>
                     </td>
                     <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
-                      {t.player?.name || 'Jogador'} ({t.player?.rating || '-'})
+                      {t.card?.player_name || t.player?.name || 'Jogador'} ({t.card?.rating || t.player?.rating || '-'}) {t.card?.club ? `• ${t.card.club}` : ''}
                     </td>
                     <td>
                       <span className={`badge ${t.is_paper_trade ? 'cyan' : 'gold'}`}>

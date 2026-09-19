@@ -1,7 +1,7 @@
 export interface Player {
   id: string;
   name: string;
-  rating: number;
+  rating?: number | null;
   position?: string | null;
   rarity?: string | null;
   league?: string | null;
@@ -11,10 +11,38 @@ export interface Player {
   updated_at: string;
 }
 
-export interface MarketOpportunity {
+export interface CardExternalId {
+  id: string;
+  card_id: string;
+  provider: string;
+  external_id: string;
+  created_at: string;
+}
+
+export interface PlayerCard {
   id: string;
   player_id: string;
-  player: Player;
+  player_name?: string | null;
+  game_version: string;
+  rating: number;
+  position?: string | null;
+  rarity?: string | null;
+  club?: string | null;
+  league?: string | null;
+  nation?: string | null;
+  is_active: boolean;
+  external_ids?: CardExternalId[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MarketOpportunity {
+  id: string;
+  card_id: string;
+  player_id?: string | null;
+  card?: PlayerCard | null;
+  player?: Player | null;
+  platform: string;
   observed_price: number;
   market_price: number;
   max_buy_price: number;
@@ -30,7 +58,9 @@ export interface MarketOpportunity {
 
 export interface Trade {
   id: string;
-  player_id: string;
+  card_id: string;
+  player_id?: string | null;
+  card?: PlayerCard | null;
   player?: Player | null;
   buy_price: number;
   sell_price?: number | null;
@@ -42,6 +72,9 @@ export interface Trade {
   sold_at?: string | null;
   status: 'open' | 'sold' | 'cancelled';
   is_paper_trade: boolean;
+  trading_goal_id?: string | null;
+  action_recommendation_id?: string | null;
+  data_origin?: string;
   created_at: string;
 }
 
@@ -65,22 +98,134 @@ export interface BankrollSummary {
   is_paper: boolean;
 }
 
-export interface ObservationBatchItem {
-  player: string;
-  rating: number;
-  price: number;
-  type: 'buy_now' | 'bid' | 'sale_estimate';
-  position?: string;
-  rarity?: string;
-  league?: string;
-  club?: string;
-  nation?: string;
+export interface BankrollCapitalSummary {
+  total_equity: number;
+  cash_balance: number;
+  available_cash: number;
+  inventory_cost: number;
+  open_positions_count: number;
+  total_trading_profit: number;
+  total_external_rewards: number;
+  total_external_expenses: number;
+  total_reconciliations: number;
+  total_external_adjustments: number;
+  is_configured: boolean;
+  is_paper: boolean;
+}
+
+export interface BankrollAdjustmentPayload {
+  amount: number;
+  adjustment_type: 'reward' | 'external_purchase' | 'manual_correction';
+  reason?: string;
+  is_paper: boolean;
+}
+
+export interface BankrollOnboardingPayload {
+  cash_balance: number;
+  target_balance: number;
+}
+
+export interface BankrollSyncPayload {
+  current_actual_balance: number;
+  reason?: string;
+  is_paper?: boolean;
+}
+
+export interface TradingGoal {
+  id: string;
+  starting_balance: number;
+  target_balance: number;
+  current_balance: number;
+  status: 'ACTIVE' | 'COMPLETED' | 'CLOSED';
+  is_paper: boolean;
+  data_origin: string;
+  started_at: string;
+  completed_at?: string | null;
+  closed_at?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+  progress_percentage: number;
+  trades_count: number;
+  profit_in_goal: number;
+  win_rate: number | null;
+}
+
+export interface TradingGoalCreatePayload {
+  target_balance: number;
+  starting_balance?: number;
+  is_paper: boolean;
+}
+
+export interface PurchaseItem {
+  buy_price: number;
+}
+
+export interface ActionFeedbackPayload {
+  recommendation_id: string;
+  action_result: 'BOUGHT' | 'MISSED' | 'CANCELLED';
+  purchases?: PurchaseItem[];
+  missed_reason?: string | null;
+  notes?: string | null;
+}
+
+export interface ActionRecommendation {
+  id: string;
+  card_id: string;
+  player_id?: string | null;
+  trading_goal_id?: string | null;
+  opportunity_id?: string | null;
+  action_type: string;
+  strategy_name: string;
+  player_name: string;
+  player_rating: number;
+
+  // Identidade Inequívoca da Versão da Carta
+  card_version_name?: string | null;
+  card_club?: string | null;
+  card_league?: string | null;
+  card_position?: string | null;
+  card_platform?: string | null;
+
+  max_buy_price: number;
+  target_sell_price: number;
+  recommended_quantity: number;
+  capital_limit: number;
+  estimated_profit_per_card: number;
+  estimated_total_profit: number;
+  estimated_roi: number;
+  snapshot_market_price: number;
+  snapshot_observed_price: number;
+  snapshot_liquidity_score: number;
+  snapshot_confidence: string;
+  snapshot_opportunity_score: number;
+  snapshot_sample_count: number;
+  snapshot_available_cash: number;
+  why_explanation: string;
+  urgency: string;
+  status: string;
+  is_paper: boolean;
+  data_origin: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface CurrentActionResponse {
+  has_action: boolean;
+  status: 'ACTION_AVAILABLE' | 'NO_ACTION' | 'GOAL_INACTIVE' | 'BANKROLL_NOT_CONFIGURED' | 'INSUFFICIENT_DATA';
+  action?: ActionRecommendation | null;
+  title?: string | null;
+  message?: string | null;
+  suggestion?: string | null;
 }
 
 export interface OpportunityAnalysis {
+  card_id: string;
   player_id: string;
   player_name: string;
   rating: number;
+  version_name?: string | null;
+  club?: string | null;
+  platform: string;
   observed_price: number;
   market_price: number | null;
   max_buy_price: number;
@@ -97,4 +242,22 @@ export interface OpportunityAnalysis {
 export interface ObservationBatchResponse {
   processed_count: number;
   analyses: OpportunityAnalysis[];
+}
+
+export interface ObservationBatchItem {
+  player: string;
+  rating: number;
+  price: number;
+  type: string;
+  position?: string;
+  rarity?: string;
+  league?: string;
+  club?: string;
+  nation?: string;
+  platform?: string;
+  card_id?: string;
+  external_card_id?: string;
+  provider?: string;
+  data_origin?: string;
+  observed_at?: string;
 }

@@ -1,5 +1,11 @@
 import {
   BankrollSummary,
+  BankrollCapitalSummary,
+  BankrollAdjustmentPayload,
+  TradingGoal,
+  TradingGoalCreatePayload,
+  CurrentActionResponse,
+  ActionFeedbackPayload,
   MarketOpportunity,
   ObservationBatchItem,
   ObservationBatchResponse,
@@ -43,10 +49,73 @@ export const api = {
     return res.json();
   },
 
+  // Bankroll & Capital Accounting
   async getBankroll(isPaper: boolean = false): Promise<BankrollSummary> {
     return fetchJson<BankrollSummary>(`/bankroll?is_paper=${isPaper}`);
   },
 
+  async getCapitalSummary(isPaper: boolean = false): Promise<BankrollCapitalSummary> {
+    return fetchJson<BankrollCapitalSummary>(`/bankroll/capital?is_paper=${isPaper}`);
+  },
+
+  async recordAdjustment(payload: BankrollAdjustmentPayload): Promise<any> {
+    return fetchJson<any>('/bankroll/adjustments', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async onboardBankroll(payload: { cash_balance: number; target_balance: number }): Promise<BankrollCapitalSummary> {
+    return fetchJson<BankrollCapitalSummary>('/bankroll/onboarding', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async syncBankroll(payload: { current_actual_balance: number; reason?: string; is_paper?: boolean }): Promise<any> {
+    return fetchJson<any>('/bankroll/sync', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  // Goals
+  async getActiveGoal(isPaper: boolean = false): Promise<TradingGoal | null> {
+    return fetchJson<TradingGoal | null>(`/goals/active?is_paper=${isPaper}`);
+  },
+
+  async createGoal(payload: TradingGoalCreatePayload): Promise<TradingGoal> {
+    return fetchJson<TradingGoal>('/goals', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async completeGoal(goalId: string): Promise<TradingGoal> {
+    return fetchJson<TradingGoal>(`/goals/${goalId}/complete`, {
+      method: 'POST',
+    });
+  },
+
+  async closeGoal(goalId: string): Promise<TradingGoal> {
+    return fetchJson<TradingGoal>(`/goals/${goalId}/close`, {
+      method: 'POST',
+    });
+  },
+
+  // Action Engine & Feedback
+  async getCurrentAction(isPaper: boolean = false): Promise<CurrentActionResponse> {
+    return fetchJson<CurrentActionResponse>(`/actions/current?is_paper=${isPaper}`);
+  },
+
+  async sendActionFeedback(payload: ActionFeedbackPayload): Promise<any> {
+    return fetchJson<any>('/actions/feedback', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  // Market Opportunities & Analysis (Phase 1)
   async getOpportunities(params?: {
     player?: string;
     min_rating?: number;
@@ -74,18 +143,37 @@ export const api = {
     });
   },
 
-  async getTrades(isPaper?: boolean): Promise<Trade[]> {
-    const qs = isPaper !== undefined ? `?is_paper=${isPaper}` : '';
-    return fetchJson<Trade[]>(`/trades${qs}`);
+  // Trades
+  async getTrades(isPaper?: boolean, status?: string): Promise<Trade[]> {
+    const params = new URLSearchParams();
+    if (isPaper !== undefined) params.set('is_paper', isPaper.toString());
+    if (status) params.set('status', status);
+    const qs = params.toString();
+    return fetchJson<Trade[]>(`/trades${qs ? `?${qs}` : ''}`);
   },
 
-  async openTrade(playerId: string, buyPrice: number, isPaper: boolean = true): Promise<Trade> {
+  async openTrade(
+    params: { cardId?: string; playerId?: string; buyPrice: number; isPaper?: boolean } | string,
+    legacyBuyPrice?: number,
+    legacyIsPaper: boolean = true
+  ): Promise<Trade> {
+    if (typeof params === 'object') {
+      return fetchJson<Trade>('/trades', {
+        method: 'POST',
+        body: JSON.stringify({
+          card_id: params.cardId,
+          player_id: params.playerId,
+          buy_price: params.buyPrice,
+          is_paper_trade: params.isPaper ?? true,
+        }),
+      });
+    }
     return fetchJson<Trade>('/trades', {
       method: 'POST',
       body: JSON.stringify({
-        player_id: playerId,
-        buy_price: buyPrice,
-        is_paper_trade: isPaper,
+        player_id: params,
+        buy_price: legacyBuyPrice,
+        is_paper_trade: legacyIsPaper,
       }),
     });
   },
@@ -96,6 +184,13 @@ export const api = {
       body: JSON.stringify({
         sell_price: sellPrice,
       }),
+    });
+  },
+
+  // Dev Cleanup (Tests Only)
+  async cleanupTestData(): Promise<any> {
+    return fetchJson<any>('/dev/cleanup-test-data', {
+      method: 'POST',
     });
   },
 };
