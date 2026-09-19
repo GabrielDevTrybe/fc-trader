@@ -74,15 +74,13 @@ export const LiveOpportunitiesTable: React.FC<LiveOpportunitiesTableProps> = ({
                 return (
                   <tr key={opp.id}>
                     <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
-                      {opp.player.name}
-                      {opp.player.position && (
-                        <span style={{ fontSize: '10px', marginLeft: '6px', color: 'var(--text-muted)' }}>
-                          {opp.player.position}
-                        </span>
-                      )}
+                      <div>{opp.card?.player_name || opp.player?.name || 'Jogador'}</div>
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 400 }}>
+                        {opp.card?.rarity || 'Gold'} {opp.card?.position || opp.player?.position ? `• ${opp.card?.position || opp.player?.position}` : ''} {opp.card?.club ? `• ${opp.card.club}` : ''}
+                      </div>
                     </td>
                     <td>
-                      <span className="badge cyan mono">{opp.player.rating}</span>
+                      <span className="badge cyan mono">{opp.card?.rating || opp.player?.rating || '--'}</span>
                     </td>
                     <td className="mono">{opp.market_price.toLocaleString('pt-BR')}</td>
                     <td className="mono" style={{ color: 'var(--accent-gold)', fontWeight: 700 }}>

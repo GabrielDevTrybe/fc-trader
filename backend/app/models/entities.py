@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -21,48 +22,104 @@ def generate_uuid():
 
 
 class Player(Base):
+    """Representa a entidade humana/atleta no mundo real."""
     __tablename__ = "players"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid)
     name = Column(String(100), index=True, nullable=False)
-    rating = Column(Integer, index=True, nullable=False)
+    nation = Column(String(100), nullable=True)
+    # Colunas legadas mantidas para retrocompatibilidade no banco
+    rating = Column(Integer, index=True, nullable=True)
     position = Column(String(10), nullable=True)
     rarity = Column(String(50), nullable=True)
     league = Column(String(100), nullable=True)
     club = Column(String(100), nullable=True)
+    data_origin = Column(String(20), nullable=False, default="user", server_default="user")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    # Relacionamento com as versões negociáveis de cartas do atleta
+    cards = relationship("PlayerCard", back_populates="player", cascade="all, delete-orphan")
+
+
+class PlayerCard(Base):
+    """Representa uma versão de carta negociável específica (CardVersion / PlayerItem).
+
+    Exemplo:
+      Atleta Exemplo -> Gold 82 Clube A
+      Atleta Exemplo -> Gold 82 Clube B
+    A plataforma pertence à observação de mercado, não à identidade intrínseca da carta.
+    """
+    __tablename__ = "player_cards"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid)
+    player_id = Column(UUID(as_uuid=True), ForeignKey("players.id", ondelete="CASCADE"), nullable=False, index=True)
+    game_version = Column(String(20), nullable=False, default="FC27", server_default="FC27")
+    rating = Column(Integer, index=True, nullable=False)
+    position = Column(String(10), nullable=True)
+    rarity = Column(String(50), nullable=True)       # Gold Rare, Gold Common, TOTW, Hero, etc.
+    club = Column(String(100), nullable=True)
+    league = Column(String(100), nullable=True)
     nation = Column(String(100), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true")
     data_origin = Column(String(20), nullable=False, default="user", server_default="user")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationships
-    observations = relationship("PriceObservation", back_populates="player", cascade="all, delete-orphan")
-    opportunities = relationship("MarketOpportunity", back_populates="player", cascade="all, delete-orphan")
-    trades = relationship("Trade", back_populates="player", cascade="all, delete-orphan")
-    recommendations = relationship("ActionRecommendation", back_populates="player", cascade="all, delete-orphan")
+    player = relationship("Player", back_populates="cards")
+    external_ids = relationship("CardExternalId", back_populates="card", cascade="all, delete-orphan")
+    observations = relationship("PriceObservation", back_populates="card", cascade="all, delete-orphan")
+    opportunities = relationship("MarketOpportunity", back_populates="card", cascade="all, delete-orphan")
+    trades = relationship("Trade", back_populates="card", cascade="all, delete-orphan")
+    recommendations = relationship("ActionRecommendation", back_populates="card", cascade="all, delete-orphan")
+
+
+class CardExternalId(Base):
+    """Mapeia identificadores externos fornecidos por diferentes provedores de mercado autorizados."""
+    __tablename__ = "card_external_ids"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid)
+    card_id = Column(UUID(as_uuid=True), ForeignKey("player_cards.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider = Column(String(50), nullable=False, index=True)  # ex: provider_a, provider_b
+    external_id = Column(String(100), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("provider", "external_id", name="uq_card_external_provider_id"),
+        UniqueConstraint("card_id", "provider", name="uq_card_provider"),
+    )
+
+    card = relationship("PlayerCard", back_populates="external_ids")
 
 
 class PriceObservation(Base):
+    """Observação de preço no mercado vinculada à versão específica da carta."""
     __tablename__ = "price_observations"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid)
-    player_id = Column(UUID(as_uuid=True), ForeignKey("players.id", ondelete="CASCADE"), nullable=False, index=True)
+    card_id = Column(UUID(as_uuid=True), ForeignKey("player_cards.id", ondelete="CASCADE"), nullable=False, index=True)
+    player_id = Column(UUID(as_uuid=True), ForeignKey("players.id", ondelete="CASCADE"), nullable=True, index=True)
     price = Column(Integer, nullable=False)
     observation_type = Column(String(30), nullable=False, default="buy_now")  # buy_now, bid, sale_estimate
-    source = Column(String(50), nullable=False, default="manual")
+    platform = Column(String(20), nullable=False, default="console", server_default="console")  # console, pc
+    source = Column(String(50), nullable=False, default="manual")  # Proveniência da cotação
     data_origin = Column(String(20), nullable=False, default="user", server_default="user")
     observed_at = Column(DateTime(timezone=True), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now())
 
     # Relationships
-    player = relationship("Player", back_populates="observations")
+    card = relationship("PlayerCard", back_populates="observations")
+    player = relationship("Player")
 
 
 class MarketOpportunity(Base):
+    """Oportunidade de mercado detectada para uma versão específica de carta."""
     __tablename__ = "market_opportunities"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid)
-    player_id = Column(UUID(as_uuid=True), ForeignKey("players.id", ondelete="CASCADE"), nullable=False, index=True)
+    card_id = Column(UUID(as_uuid=True), ForeignKey("player_cards.id", ondelete="CASCADE"), nullable=False, index=True)
+    player_id = Column(UUID(as_uuid=True), ForeignKey("players.id", ondelete="CASCADE"), nullable=True, index=True)
     observed_price = Column(Integer, nullable=False)
     market_price = Column(Integer, nullable=False)
     max_buy_price = Column(Integer, nullable=False)
@@ -72,12 +129,14 @@ class MarketOpportunity(Base):
     confidence = Column(String(20), nullable=False)
     liquidity_score = Column(Integer, nullable=False)
     opportunity_score = Column(Float, nullable=False, index=True)
+    platform = Column(String(20), nullable=False, default="console", server_default="console")
     data_origin = Column(String(20), nullable=False, default="user", server_default="user")
     detected_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     expires_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
-    player = relationship("Player", back_populates="opportunities")
+    card = relationship("PlayerCard", back_populates="opportunities")
+    player = relationship("Player")
 
 
 class TradingGoal(Base):
@@ -102,17 +161,27 @@ class TradingGoal(Base):
 
 
 class ActionRecommendation(Base):
+    """Recomendação executável snapshotada para uma versão específica de carta."""
     __tablename__ = "action_recommendations"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid)
     trading_goal_id = Column(UUID(as_uuid=True), ForeignKey("trading_goals.id", ondelete="SET NULL"), nullable=True, index=True)
     opportunity_id = Column(UUID(as_uuid=True), ForeignKey("market_opportunities.id", ondelete="SET NULL"), nullable=True)
-    player_id = Column(UUID(as_uuid=True), ForeignKey("players.id", ondelete="CASCADE"), nullable=False, index=True)
+    card_id = Column(UUID(as_uuid=True), ForeignKey("player_cards.id", ondelete="CASCADE"), nullable=False, index=True)
+    player_id = Column(UUID(as_uuid=True), ForeignKey("players.id", ondelete="CASCADE"), nullable=True, index=True)
 
     action_type = Column(String(30), nullable=False)       # MASS_BID, SNIPE_BUY_NOW, CONSERVATIVE_FLIP
     strategy_name = Column(String(50), nullable=False)     # Mass Bidding, Sniping, Flip Conservador
     player_name = Column(String(100), nullable=False)
     player_rating = Column(Integer, nullable=False)
+
+    # Identidade Inequívoca da Versão da Carta
+    card_version_name = Column(String(50), nullable=True)  # Gold, TOTW, etc.
+    card_club = Column(String(100), nullable=True)          # Benfica, Bayern München, etc.
+    card_league = Column(String(100), nullable=True)        # Liga Portugal, Bundesliga, etc.
+    card_position = Column(String(10), nullable=True)       # CDM, CM, etc.
+    card_platform = Column(String(20), nullable=True, default="console")
+
     max_buy_price = Column(Integer, nullable=False)
     target_sell_price = Column(Integer, nullable=False)
     recommended_quantity = Column(Integer, nullable=False)
@@ -139,7 +208,8 @@ class ActionRecommendation(Base):
     expires_at = Column(DateTime(timezone=True), nullable=False)
 
     # Relationships
-    player = relationship("Player", back_populates="recommendations")
+    card = relationship("PlayerCard", back_populates="recommendations")
+    player = relationship("Player")
     trading_goal = relationship("TradingGoal", back_populates="recommendations")
     feedbacks = relationship("ActionFeedback", back_populates="recommendation", cascade="all, delete-orphan")
 
@@ -152,7 +222,7 @@ class ActionFeedback(Base):
     action_result = Column(String(30), nullable=False)  # BOUGHT, MISSED, CANCELLED
     effective_price = Column(Integer, nullable=True)
     quantity_bought = Column(Integer, nullable=True)
-    missed_reason = Column(String(50), nullable=True)  # price_rose, no_cards_found, lost_bids, given_up, other
+    missed_reason = Column(String(50), nullable=True)
     notes = Column(Text, nullable=True)
     data_origin = Column(String(20), nullable=False, default="user", server_default="user")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now())
@@ -165,7 +235,8 @@ class Trade(Base):
     __tablename__ = "trades"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid)
-    player_id = Column(UUID(as_uuid=True), ForeignKey("players.id", ondelete="CASCADE"), nullable=False, index=True)
+    card_id = Column(UUID(as_uuid=True), ForeignKey("player_cards.id", ondelete="CASCADE"), nullable=False, index=True)
+    player_id = Column(UUID(as_uuid=True), ForeignKey("players.id", ondelete="CASCADE"), nullable=True, index=True)
     trading_goal_id = Column(UUID(as_uuid=True), ForeignKey("trading_goals.id", ondelete="SET NULL"), nullable=True, index=True)
     action_recommendation_id = Column(UUID(as_uuid=True), ForeignKey("action_recommendations.id", ondelete="SET NULL"), nullable=True, index=True)
     buy_price = Column(Integer, nullable=False)
@@ -183,7 +254,8 @@ class Trade(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationships
-    player = relationship("Player", back_populates="trades")
+    card = relationship("PlayerCard", back_populates="trades")
+    player = relationship("Player")
     trading_goal = relationship("TradingGoal", back_populates="trades")
 
 
@@ -195,8 +267,10 @@ class BankrollHistory(Base):
     reason = Column(String(100), nullable=False)
     is_paper = Column(Boolean, nullable=False, default=False)
     amount = Column(Integer, nullable=True)
-    entry_type = Column(String(30), nullable=False, default="trade", server_default="trade")  # trade, external_adjustment, initial_deposit
-    adjustment_type = Column(String(50), nullable=True)  # reward, external_purchase, manual_correction
+    # Tipos de entrada: trade, external_adjustment, initial_deposit, manual_reconciliation
+    entry_type = Column(String(30), nullable=False, default="trade", server_default="trade")
+    # Subtipos: reward, external_purchase, manual_correction, reconciliation
+    adjustment_type = Column(String(50), nullable=True)
     trading_goal_id = Column(UUID(as_uuid=True), ForeignKey("trading_goals.id", ondelete="SET NULL"), nullable=True, index=True)
     data_origin = Column(String(20), nullable=False, default="user", server_default="user")
     recorded_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

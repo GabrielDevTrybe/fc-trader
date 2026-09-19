@@ -36,7 +36,12 @@ export const PaperTradeModal: React.FC<PaperTradeModalProps> = ({
     setErrorMessage(null);
 
     try {
-      await api.openTrade(opportunity.player_id, parseInt(buyPrice, 10), true);
+      await api.openTrade({
+        cardId: opportunity.card_id,
+        playerId: opportunity.player_id ?? undefined,
+        buyPrice: parseInt(buyPrice, 10),
+        isPaper: true,
+      });
       onSuccess();
       onClose();
     } catch (err: any) {
@@ -98,10 +103,12 @@ export const PaperTradeModal: React.FC<PaperTradeModalProps> = ({
               <>
                 <div style={{ padding: '10px', background: 'var(--bg-surface-elevated)', borderRadius: '8px' }}>
                   <div style={{ fontWeight: 700, fontSize: '14px' }}>
-                    {opportunity.player.name} ({opportunity.player.rating})
+                    {opportunity.card?.player_name || opportunity.player?.name || 'Carta'} {opportunity.card?.rating || opportunity.player?.rating ? `(${opportunity.card?.rating || opportunity.player?.rating})` : ''}
+                    {opportunity.card?.rarity ? ` • ${opportunity.card.rarity}` : ''}
+                    {opportunity.card?.club ? ` • ${opportunity.card.club}` : ''}
                   </div>
                   <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                    Mercado: {opportunity.market_price} | Alvo Venda: {opportunity.target_sell_price}
+                    Mercado: {opportunity.market_price.toLocaleString('pt-BR')} | Alvo Venda: {opportunity.target_sell_price.toLocaleString('pt-BR')} | Plataforma: {opportunity.platform?.toUpperCase() || 'CONSOLE'}
                   </div>
                 </div>
 
@@ -122,7 +129,8 @@ export const PaperTradeModal: React.FC<PaperTradeModalProps> = ({
               <>
                 <div style={{ padding: '10px', background: 'var(--bg-surface-elevated)', borderRadius: '8px' }}>
                   <div style={{ fontWeight: 700, fontSize: '14px' }}>
-                    {tradeToClose.player?.name} ({tradeToClose.player?.rating})
+                    {tradeToClose.card?.player_name || tradeToClose.player?.name || 'Carta'} {tradeToClose.card?.rating || tradeToClose.player?.rating ? `(${tradeToClose.card?.rating || tradeToClose.player?.rating})` : ''}
+                    {tradeToClose.card?.club ? ` • ${tradeToClose.card.club}` : ''}
                   </div>
                   <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
                     Comprado por: {tradeToClose.buy_price.toLocaleString('pt-BR')} coins
@@ -136,8 +144,8 @@ export const PaperTradeModal: React.FC<PaperTradeModalProps> = ({
                     type="number"
                     value={sellPrice}
                     onChange={(e) => setSellPrice(e.target.value)}
-                    min="100"
-                    step="50"
+                    min="1"
+                    step="1"
                     required
                   />
                 </div>

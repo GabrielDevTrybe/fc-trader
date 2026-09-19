@@ -18,19 +18,18 @@ def record_observations(
         description="Pode ser um único objeto de observação ou uma lista em lote (batch).",
         examples=[
             [
-                {"player": "Palhinha", "rating": 82, "price": 600, "type": "bid"},
-                {"player": "Savinho", "rating": 80, "price": 650, "type": "buy_now"},
+                {"player": "Exemplo Jogador", "rating": 84, "price": 1200, "type": "bid", "club": "Exemplo FC", "position": "CM"},
             ]
         ],
     ),
     db: Session = Depends(get_db),
 ):
-    """Ingestão rápida de observações de preços manuais ou em lote.
+    """Ingestão rápida de observações de preços manuais ou em lote por CardVersion.
 
     Processa o pipeline em poucos milissegundos:
     1. Validação dos dados
-    2. Identificação/Criação do jogador
-    3. Registro da observação
+    2. Identificação/Criação do jogador e da CardVersion canônica
+    3. Registro da observação vinculada à carta e plataforma
     4. Atualização estatística de mercado (MarketPriceEngine)
     5. Avaliação do TradingEngine
     6. Cálculo do OpportunityScore
